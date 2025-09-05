@@ -79,18 +79,6 @@ export LIVE_MODE=false
 python run_system.py
 ```
 
-#### Virtual Environment Commands (macOS/Linux)
-```bash
-# Create virtual environment
-python3 -m venv venv
-
-# Activate virtual environment
-source venv/bin/activate
-
-# Deactivate when done
-deactivate
-```
-
 **Python Version Requirements:**
 - **Recommended**: Python 3.8 or higher
 - **Minimum**: Python 3.7 (may require package version adjustments)
@@ -151,24 +139,13 @@ deactivate
 - **Switching Criteria**: Requires combination of high trust score (>0.8), strong conviction, and advantageous technical indicators
 - **Cost Awareness**: Considers transaction fees and spread costs when evaluating position changes
 
-### 5. Advanced Order Execution Strategy
+### 5. Order Execution Strategy
 
-#### Selling Phase (Complete Liquidation)
+#### Reallocation Phase
 - **Order Cancellation**: Cancels any outstanding orders holding funds to maximize available balance
-- **Iterative Limit Orders**: Attempts 3 progressive limit sell orders:
-  - **Iteration 1**: 0.5% below current price, 2-minute polling
-  - **Iteration 2**: 0.6% below current price, 2-minute polling
-  - **Iteration 3**: 0.7% below current price, 2-minute polling
+- **Iterative Limit Orders**: Attempts limit orders near market price
 - **Market Fallback**: Executes market order if all limit attempts timeout
 - **Balance Tracking**: Monitors available vs held balances throughout process
-
-#### Buying Phase (Complete Reallocation)
-- **Capital Deployment**: Uses 95% of post-liquidation USD balance for new position
-- **Iterative Limit Orders**: Attempts 3 progressive limit buy orders:
-  - **Iteration 1**: 0.5% above current price, 2-minute polling
-  - **Iteration 2**: 0.6% above current price, 2-minute polling
-  - **Iteration 3**: 0.7% above current price, 2-minute polling
-- **Market Fallback**: Executes market order if all limit attempts timeout
 - **Stop-Loss Protection**: Configurable via `STOP_LOSS_PERCENTAGE` environment variable (default: 20% below entry price)
 
 #### Stop-Loss Configuration
