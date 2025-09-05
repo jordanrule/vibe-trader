@@ -131,14 +131,13 @@ deactivate
 - **Source Performance Tracking**: Maintains per-source statistics including success rate, average profit/loss, and total trades processed
 - **Live Learning**: Updated exclusively during live trading cycles (no offline training due to Telegram API historical data limitations)
 
-### 3. Telegram Message Processing
+### 3. Check Opportunities on Telegram
 - **Polling Strategy**: Queries Telegram Bot API for messages since last update using `state_last_update_id.json`
 - **Real-time Detection**: Processes only new messages since previous cycle to avoid duplicate processing
 - **Asset Extraction**: Identifies cryptocurrency mentions using OpenAI analysis of message content
 - **Sentiment Integration**: Combines message sentiment with technical confirmation before opportunity creation
 
-### 4. Technical Analysis Integration
-**Technical Indicators Used:**
+**Technical Indicators Calculated:**
 - **Price Momentum**: SMA (Simple Moving Average), EMA (Exponential Moving Average)
 - **Trend Strength**: MACD (Moving Average Convergence Divergence) with signal line
 - **Volatility**: Bollinger Bands (20-period, 2 standard deviations)
@@ -146,13 +145,13 @@ deactivate
 - **Price Change**: 24-hour percentage change from Kraken ticker data
 - **Volume Metrics**: 24-hour volume and price-volume trends
 
-### 5. Portfolio Analysis & Position Management
+### 4. Portfolio Analysis & Position Management
 - **RAG Decision Framework**: OpenAI analyzes current portfolio against new opportunities using technical indicators and trust scores
 - **Holding Preference**: Explicit bias towards maintaining positions until `MAX_TRADE_LIFETIME_HOURS` expires unless high-trust opportunities emerge
 - **Switching Criteria**: Requires combination of high trust score (>0.8), strong conviction, and advantageous technical indicators
 - **Cost Awareness**: Considers transaction fees and spread costs when evaluating position changes
 
-### 6. Advanced Order Execution Strategy
+### 5. Advanced Order Execution Strategy
 
 #### Selling Phase (Complete Liquidation)
 - **Order Cancellation**: Cancels any outstanding orders holding funds to maximize available balance
