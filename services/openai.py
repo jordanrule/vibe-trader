@@ -32,16 +32,30 @@ class OpenAIService(BaseService):
         super().__init__(config)
         self.api_key = config.get('openai_api_key')
         self.client = None
-        
+
         if self.api_key:
             try:
                 import openai
-                self.client = openai.OpenAI(api_key=self.api_key)
+
+                # Try the newer client syntax first (OpenAI v1.x)
+                try:
+                    self.client = openai.OpenAI(api_key=self.api_key)
+                    logger.info("OpenAI client initialized (v1.x syntax)")
+                except TypeError as e:
+                    # Fall back to older syntax for OpenAI v0.x
+                    if "unexpected keyword argument" in str(e):
+                        openai.api_key = self.api_key
+                        self.client = openai
+                        logger.info("OpenAI client initialized (legacy syntax)")
+                    else:
+                        raise e
+
                 logger.info("OpenAI API key configured")
             except ImportError:
-                logger.warning("OpenAI not installed. Run: pip install openai==1.14.0")
+                logger.warning("OpenAI not installed. Run: pip install openai==1.12.0")
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI client: {e}")
+                self.client = None
         else:
             logger.warning("OpenAI API key not found. Sentiment analysis will be disabled.")
     
@@ -236,14 +250,24 @@ Adjust confidence based on source credibility - established exchanges should get
 
             logger.info(f"Sending sentiment analysis request to OpenAI for {asset}")
             logger.debug(f"OpenAI Query: {prompt[:500]}...")  # Log first 500 chars
-            
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert cryptocurrency trader focused on risk-adjusted profit maximization."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
+
+            # Handle both new and legacy OpenAI client syntax
+            if hasattr(self.client, 'chat'):  # New syntax (v1.x)
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert cryptocurrency trader focused on risk-adjusted profit maximization."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+            else:  # Legacy syntax
+                response = self.client.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert cryptocurrency trader focused on risk-adjusted profit maximization."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
             
             response_text = response.choices[0].message.content.strip()
             logger.info(f"OpenAI Response: {response_text}")
@@ -370,14 +394,24 @@ IMPORTANT:
 """
 
             logger.info(f"Sending portfolio analysis request to OpenAI for {len(portfolio_data)} assets")
-            
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert cryptocurrency portfolio manager focused on selecting the most profitable trades."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
+
+            # Handle both new and legacy OpenAI client syntax
+            if hasattr(self.client, 'chat'):  # New syntax (v1.x)
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert cryptocurrency portfolio manager focused on selecting the most profitable trades."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+            else:  # Legacy syntax
+                response = self.client.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert cryptocurrency portfolio manager focused on selecting the most profitable trades."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
             
             response_text = response.choices[0].message.content.strip()
             logger.info(f"OpenAI Portfolio Response: {response_text}")
