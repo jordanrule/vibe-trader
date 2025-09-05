@@ -42,12 +42,18 @@ class TradingAgent:
             'kraken_api_key': os.getenv('KRAKEN_API_KEY'),
             'kraken_secret': os.getenv('KRAKEN_SECRET'),
             'live_mode': os.getenv('LIVE_MODE', 'false').lower() == 'true',
-            'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '4'))
+            'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '4')),
+            'stop_loss_percentage': float(os.getenv('STOP_LOSS_PERCENTAGE', '20'))
         }
         
         # Validate required configuration
         if not self.config['telegram_token']:
             raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+
+        # Log configuration
+        logger.info(f"TradingAgent initialized (max trade lifetime: {self.config['max_trade_lifetime_hours']}h)")
+        logger.info(f"Stop-loss configured: {self.config['stop_loss_percentage']}% below entry price")
+        logger.info(f"Live trading mode: {self.config['live_mode']}")
         
         # Initialize services
         self.telegram_service = TelegramService(self.config)
@@ -342,18 +348,22 @@ class TradingAgent:
                         # BalanceEx format: {'balance': 'X', 'hold_trade': 'Y'}
                         balance = float(balance_entry.get('balance', 0) or 0)
                         hold_trade = float(balance_entry.get('hold_trade', 0) or 0)
-                        bal = balance - hold_trade
+                        available_bal = balance - hold_trade
+                        total_bal = balance
                     else:
                         # Balance format: 'X'
-                        bal = float(balance_entry)
+                        available_bal = float(balance_entry)
+                        total_bal = available_bal
                 except (TypeError, ValueError):
                     continue
-                if bal <= 0:
-                    continue
+
                 # Skip fiat/stable assets
                 if asset in stable_or_fiat_assets:
                     continue
-                current_positions[asset] = bal
+
+                # Include positions with total balance > 0 (even if available is 0 due to holds)
+                if total_bal > 0:
+                    current_positions[asset] = available_bal  # Use available for trading, but track total
 
             if not current_positions:
                 logger.info("No current positions to sell")
@@ -362,8 +372,23 @@ class TradingAgent:
                 logger.info(f"🧪 Executing complete liquidation of {len(current_positions)} positions")
                 total_liquidated = 0
 
-                for asset, balance in current_positions.items():
-                    liquidated_amount = await self._execute_complete_liquidation(asset, balance)
+                for asset, available_balance in current_positions.items():
+                    # Check if this position has total balance even if available is 0
+                    total_balance = 0
+                    for bal_asset, bal_entry in balances.items():
+                        if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']):
+                            try:
+                                if isinstance(bal_entry, dict):
+                                    total_balance = float(bal_entry.get('balance', 0) or 0)
+                                else:
+                                    total_balance = float(bal_entry or 0)
+                                break
+                            except (TypeError, ValueError):
+                                continue
+
+                    logger.info(f"🎯 Processing {asset}: available={available_balance:.8f}, total={total_balance:.8f}")
+
+                    liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
                     if liquidated_amount > 0:
                         total_liquidated += liquidated_amount
                         logger.info(f"💰 Liquidated ${liquidated_amount:.2f} worth of {asset}")
@@ -442,13 +467,13 @@ class TradingAgent:
                                     logger.warning(f"Skipping buy for {asset} - volume {volume} below ordermin {ordermin}")
                                     continue
 
-                                # Calculate stop-loss (10% below current price)
-                                stop_loss = current_price * 0.9
+                                # Calculate stop-loss based on configuration
+                                stop_loss = current_price * (1 - self.config['stop_loss_percentage'] / 100)
 
                                 # Place smart order with stop-loss (limit first, market fallback)
                                 order_id = self.kraken_service.place_smart_order(pair_id, 'buy', volume, stop_loss)
                                 if order_id:
-                                    logger.info(f"Placed smart buy order for {asset}: {order_id} (stop-loss: {stop_loss:.4f})")
+                                    logger.info(f"Placed smart buy order for {asset}: {order_id} (stop-loss: {stop_loss:.4f}, {self.config['stop_loss_percentage']}% below)")
                                 else:
                                     logger.error(f"Failed to place smart buy order for {asset}")
 
@@ -463,10 +488,9 @@ class TradingAgent:
         except Exception as e:
             logger.error(f"Error executing market orders: {e}")
     
-    async def _execute_complete_liquidation(self, asset: str, available_balance: float, held_balance: float = 0):
+    async def _execute_complete_liquidation(self, asset: str, available_balance: float, total_balance: float = 0):
         """Execute complete liquidation of an asset position using iterative smart orders"""
         try:
-            total_balance = available_balance + held_balance
             remaining_balance = available_balance  # Start with available balance
             common_asset = self._map_to_common_asset(asset)
             pair_id = self.kraken_service.get_pair_for_asset(common_asset)
@@ -475,61 +499,133 @@ class TradingAgent:
                 logger.error(f"Could not find pair for {asset}")
                 return 0
 
-            logger.info(f"🎯 Starting complete liquidation of {total_balance} {asset}")
+            logger.info(f"🎯 Starting complete liquidation of {asset} (available: {available_balance:.8f}, total: {total_balance:.8f})")
 
-            # If there are held positions, try to cancel orders first
-            if held_balance > 0:
-                logger.info(f"🔒 Found {held_balance} {asset} held in orders - attempting to cancel")
+            # Cancel ALL open orders for this asset first - this is critical
+            open_orders = self.kraken_service.get_open_orders()
+            cancelled_orders = []
 
-                # Cancel open orders for this asset
-                open_orders = self.kraken_service.get_open_orders()
-                cancelled_count = 0
+            for order_id, order_info in open_orders.items():
+                order_desc = order_info.get('descr', {})
+                order_pair = order_desc.get('pair', '')
 
-                for order_id, order_info in open_orders.items():
-                    order_desc = order_info.get('descr', {})
-                    order_pair = order_desc.get('pair', '')
+                # Check if this order is for our asset (be more permissive with matching)
+                asset_matches = False
+                if asset in order_pair:
+                    asset_matches = True
+                elif common_asset and common_asset in order_pair:
+                    asset_matches = True
+                elif asset == 'XETH' and ('ETH' in order_pair or 'ETHUSD' in order_pair):
+                    asset_matches = True
+                elif asset == 'ETH.F' and ('ETH' in order_pair or 'ETHUSD' in order_pair):
+                    asset_matches = True
 
-                    # Check if this order is for our asset
-                    if (asset in order_pair) or (common_asset and common_asset in order_pair):
-                        logger.info(f"❌ Cancelling order {order_id} for {asset}")
-                        if self.kraken_service.cancel_order(order_id):
-                            cancelled_count += 1
-                            logger.info(f"✅ Cancelled order {order_id}")
+                if asset_matches:
+                    logger.info(f"❌ Cancelling order {order_id} for {asset} (pair: {order_pair})")
+                    if self.kraken_service.cancel_order(order_id):
+                        cancelled_orders.append(order_id)
+                        logger.info(f"✅ Cancelled order {order_id}")
+                    else:
+                        logger.error(f"❌ Failed to cancel order {order_id}")
+
+            # Wait for cancellations to take effect
+            if cancelled_orders:
+                logger.info(f"⏳ Waiting 5 seconds for {len(cancelled_orders)} order cancellations to process...")
+                await asyncio.sleep(5)
+
+                # Refresh balances after cancellation
+                balances = self.kraken_service.get_available_balances()
+
+                # Update available balance after cancellations
+                for bal_asset, bal_entry in balances.items():
+                    # Match the asset we're trying to liquidate
+                    asset_match = False
+                    if bal_asset == asset:
+                        asset_match = True
+                    elif asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']:
+                        asset_match = True
+                    elif asset == 'ETH.F' and bal_asset in ['XETH', 'ETH.F', 'ETH']:
+                        asset_match = True
+
+                    if asset_match:
+                        if isinstance(bal_entry, dict):
+                            new_balance = float(bal_entry.get('balance', 0) or 0)
+                            new_hold = float(bal_entry.get('hold_trade', 0) or 0)
+                            new_available = new_balance - new_hold
+                            logger.info(f"📊 After cancellation - {bal_asset}: {new_balance:.8f} total, {new_hold:.8f} hold, {new_available:.8f} available")
+                            if new_available > remaining_balance:
+                                released = new_available - remaining_balance
+                                logger.info(f"✅ Released {released:.8f} {asset} from orders")
+                                remaining_balance = new_available
                         else:
-                            logger.error(f"❌ Failed to cancel order {order_id}")
+                            new_available = float(bal_entry or 0)
+                            logger.info(f"📊 After cancellation - {bal_asset}: {new_available:.8f} available")
+                            remaining_balance = new_available
 
-                if cancelled_count > 0:
-                    logger.info(f"⏳ Waiting 3 seconds for order cancellations...")
-                    await asyncio.sleep(3)
-
-                    # Refresh balances after cancellation
-                    balances = self.kraken_service.get_available_balances()
-
-                    # Check if we now have more available balance
-                    for bal_asset, bal_entry in balances.items():
-                        if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'ETH']):
-                            if isinstance(bal_entry, dict):
-                                new_balance = float(bal_entry.get('balance', 0) or 0)
-                                new_hold = float(bal_entry.get('hold_trade', 0) or 0)
-                                new_available = new_balance - new_hold
-                                if new_available > remaining_balance:
-                                    logger.info(f"✅ Released {new_available - remaining_balance:.8f} {asset} from orders")
-                                    remaining_balance = new_available
-
-            # Now liquidate the available balance using iterative smart orders
+            # Now try to liquidate any available balance (after potential order cancellations)
             if remaining_balance > 0:
+                logger.info(f"💰 Attempting to liquidate {remaining_balance} {asset} using smart orders")
+
                 # For complete liquidation, don't use stop-loss to ensure full execution
                 order_id = self.kraken_service.place_smart_order(pair_id, 'sell', remaining_balance, stop_loss=None)
+            elif total_balance > 0 and remaining_balance == 0:
+                # All balance is held by orders, but we already tried to cancel them above
+                # Check one more time if any balance was released
+                final_balances = self.kraken_service.get_available_balances()
+                final_available = 0
+                for bal_asset, bal_entry in final_balances.items():
+                    if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']):
+                        try:
+                            if isinstance(bal_entry, dict):
+                                balance = float(bal_entry.get('balance', 0) or 0)
+                                hold_trade = float(bal_entry.get('hold_trade', 0) or 0)
+                                final_available = balance - hold_trade
+                            else:
+                                final_available = float(bal_entry or 0)
+                            break
+                        except (TypeError, ValueError):
+                            continue
 
-                if order_id:
-                    logger.info(f"✅ Complete liquidation sell order placed for {asset}: {order_id}")
-                    return remaining_balance  # Return amount liquidated
+                if final_available > 0:
+                    logger.info(f"💰 After order cancellation, {final_available} {asset} became available - liquidating")
+                    order_id = self.kraken_service.place_smart_order(pair_id, 'sell', final_available, stop_loss=None)
                 else:
-                    logger.error(f"❌ Failed to place liquidation sell order for {asset}")
+                    logger.info(f"ℹ️ {asset} still has no available balance after order cancellation (total: {total_balance})")
+                    return 0
             else:
-                logger.info(f"ℹ️ No available balance to liquidate for {asset}")
+                logger.info(f"ℹ️ No balance to liquidate for {asset}")
+                return 0
 
-            return 0
+            if order_id:
+                logger.info(f"✅ Complete liquidation sell order placed for {asset}: {order_id}")
+
+                # Wait up to 5 minutes for the order to complete
+                logger.info("⏳ Polling for order completion (up to 5 minutes)...")
+                start_time = asyncio.get_event_loop().time()
+                timeout = 300  # 5 minutes
+
+                while asyncio.get_event_loop().time() - start_time < timeout:
+                    order_status = self.kraken_service.get_order_status(order_id)
+                    if order_status and order_status.get('status') == 'closed':
+                        executed_volume = float(order_status.get('vol_exec', 0))
+                        logger.info(f"✅ Liquidation order completed: executed {executed_volume} {asset}")
+                        return executed_volume
+                    elif order_status and order_status.get('status') in ['canceled', 'expired']:
+                        logger.warning(f"❌ Liquidation order was cancelled/expired: {order_id}")
+                        return 0
+
+                    await asyncio.sleep(10)  # Check every 10 seconds
+
+                # Order timed out
+                logger.warning(f"⏰ Liquidation order timed out after 5 minutes: {order_id}")
+                # Cancel the order
+                if self.kraken_service.cancel_order(order_id):
+                    logger.info(f"✅ Cancelled timed-out liquidation order: {order_id}")
+                return 0
+            else:
+                logger.error(f"❌ Failed to place liquidation sell order for {asset}")
+                return 0
+            # No else clause needed here - the above if/else covers all cases
 
         except Exception as e:
             logger.error(f"Error in complete liquidation for {asset}: {e}")
@@ -564,12 +660,12 @@ class TradingAgent:
                 logger.error(f"Volume {volume} too small for {asset} (minimum: {ordermin})")
                 return 0
 
-            # Calculate stop-loss (20% below entry price for full position protection)
-            stop_loss = current_price * 0.8
+            # Calculate stop-loss based on configuration
+            stop_loss = current_price * (1 - self.config['stop_loss_percentage'] / 100)
 
             logger.info(f"💰 {asset} price: ${current_price:.4f}")
             logger.info(f"📊 Buying {volume:.6f} {asset} with ${spendable_usd:.2f}")
-            logger.info(f"🛡️ Stop-loss: ${stop_loss:.4f} (20% below entry)")
+            logger.info(f"🛡️ Stop-loss: ${stop_loss:.4f} ({self.config['stop_loss_percentage']}% below entry)")
 
             # Place smart buy order with comprehensive stop-loss
             order_id = self.kraken_service.place_smart_order(pair_id, 'buy', volume, stop_loss)
@@ -605,14 +701,14 @@ class TradingAgent:
             # Calculate volume (simplified - use fixed amount)
             volume = 100.0 / current_price  # $100 worth
 
-            # Calculate stop-loss (10% below current price)
-            stop_loss = current_price * 0.9
+            # Calculate stop-loss based on configuration
+            stop_loss = current_price * (1 - self.config['stop_loss_percentage'] / 100)
 
             # Place smart buy order with stop-loss (limit first, market fallback)
             order_id = self.kraken_service.place_smart_order(pair_id, 'buy', volume, stop_loss)
 
             if order_id:
-                logger.info(f"Smart buy order placed for {asset}: {order_id} (stop-loss: ${stop_loss:.4f})")
+                logger.info(f"Smart buy order placed for {asset}: {order_id} (stop-loss: ${stop_loss:.4f}, {self.config['stop_loss_percentage']}% below)")
             else:
                 logger.error(f"Failed to place smart buy order for {asset}")
 

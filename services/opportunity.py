@@ -797,6 +797,20 @@ TECHNICAL INDICATORS:
             for asset, balance in current_positions.items():
                 current_positions_summary.append(f"{asset}: {balance} units")
             
+            # Find the best opportunity based on trust score and confidence
+            best_opportunity = None
+            best_score = 0
+
+            for item in portfolio_data:
+                trust_score = item.get('trust_score', 0.5)
+                confidence = item.get('confidence', 0.5)
+                combined_score = (trust_score + confidence) / 2
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_opportunity = item
+
+            best_asset = best_opportunity['asset'] if best_opportunity else 'ETH'
+
             prompt = f"""
 You are an expert cryptocurrency portfolio manager. Analyze this portfolio of opportunities and current positions to recommend the optimal trading action.
 
@@ -809,27 +823,28 @@ AVAILABLE OPPORTUNITIES:
 TASK:
 Given the current portfolio positions and available opportunities, recommend whether to:
 1. HOLD current positions (if they are performing well)
-2. SWITCH to ETH (Ethereum) if the opportunities suggest a better risk-adjusted return
+2. SWITCH to the best available opportunity if it offers better risk-adjusted returns
 
 Consider:
-- Current position performance vs ETH opportunity potential
+- Current position performance vs opportunity potential
 - Transaction costs (0.26% per trade)
 - Risk management and stop-loss levels
 - Technical indicators alignment
 - Source credibility and confidence scores
+- Trust scores and historical performance
 
-IMPORTANT: If switching, always recommend ETH as the target asset.
+BEST OPPORTUNITY IDENTIFIED: {best_asset} (highest combined trust + confidence score)
 
 RESPOND IN THIS EXACT JSON FORMAT:
 {{
     "action": "hold|switch",
     "reasoning": "<brief explanation of your recommendation>",
-    "recommended_assets": ["ETH"],
+    "recommended_assets": ["{best_asset}"],
     "expected_pnl_pct": <expected profit percentage>,
     "risk_score": <risk score 1-10>
 }}
 
-If action is "switch", recommend ETH as the target asset.
+If action is "switch", recommended_assets should be ["{best_asset}"].
 If action is "hold", keep current positions and recommended_assets should be empty array.
 """
 

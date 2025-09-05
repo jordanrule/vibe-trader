@@ -524,6 +524,18 @@ class KrakenService(BaseService):
         except Exception as e:
             logger.warning(f"BalanceEx not available or failed: {e}. Falling back to Balance")
             return self.get_account_balance()
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get the status of a specific order"""
+        try:
+            data = {'txid': order_id}
+            result = self.private_request('QueryOrders', data)
+            if result and order_id in result:
+                return result[order_id]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting order status for {order_id}: {e}")
+            return None
     
     def get_tradeable_pairs(self) -> Dict[str, Dict]:
         """Get list of all tradeable asset pairs from Kraken"""

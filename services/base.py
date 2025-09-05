@@ -25,3 +25,4 @@ class BaseService:
         """Get configuration value with default"""
         return self.config.get(key, default)
 
+
