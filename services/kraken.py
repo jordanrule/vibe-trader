@@ -79,7 +79,8 @@ class KrakenService(BaseService):
         if data is None:
             data = {}
         
-        # Add nonce
+        # Add nonce with small delay to prevent conflicts
+        time.sleep(0.1)  # 100ms delay between API calls
         data['nonce'] = str(int(time.time() * 1000))
         
         url = f"https://api.kraken.com/0/private/{endpoint}"
@@ -625,13 +626,13 @@ class KrakenService(BaseService):
             logger.error(f"Error checking if order {order_id} is filled: {e}")
             return False
 
-    def wait_for_order_completion(self, order_id: str, timeout_seconds: int = 300, poll_interval: int = 10) -> bool:
+    def wait_for_order_completion(self, order_id: str, timeout_seconds: int = 180, poll_interval: int = 10) -> bool:
         """
         Wait for an order to be filled or cancelled, with timeout
 
         Args:
             order_id: The order ID to monitor
-            timeout_seconds: Maximum time to wait (default 5 minutes)
+            timeout_seconds: Maximum time to wait (default 3 minutes)
             poll_interval: How often to check status (default 10 seconds)
 
         Returns:
@@ -663,11 +664,12 @@ class KrakenService(BaseService):
 
     def place_smart_order(self, pair: str, order_type: str, volume: float, stop_loss: Optional[float] = None) -> Optional[str]:
         """
-        Intelligently place orders: try iterative limit orders, fallback to market order
+        Intelligently place orders with dynamic price refresh: try limit orders with price updates
 
-        For buy orders: Try progressively more aggressive limit prices
-        For sell orders: Try progressively more aggressive limit prices
-        Poll for 2 minutes per iteration, then fallback to market order if all fail
+        For buy orders: Start with limit price 0.5% above current price
+        For sell orders: Start with limit price 0.5% below current price
+        Refresh limit price every 30 seconds at current market price
+        Fallback to market order after 5 minutes total
 
         Args:
             pair: Trading pair (e.g., 'XXBTZUSD')
@@ -679,48 +681,83 @@ class KrakenService(BaseService):
             Order ID if successful, None otherwise
         """
         try:
-            # Iterative approach with progressively more aggressive pricing
-            max_iterations = 3
+            import time
 
-            for iteration in range(max_iterations):
-                # Get fresh price for each iteration
-                current_price = self.get_current_price(pair)
-                if not current_price:
-                    logger.warning(f"Could not get current price for {pair}, falling back to market order")
-                    return self.place_market_order(pair, order_type, volume, stop_loss)
+            # Get initial price
+            current_price = self.get_current_price(pair)
+            if not current_price:
+                logger.warning(f"Could not get current price for {pair}, falling back to market order")
+                return self.place_market_order(pair, order_type, volume, stop_loss)
 
-                # Calculate limit price with progressive aggression
-                # Start with 0.5%, increase by 0.1% per iteration for more aggressive pricing
-                price_offset_pct = 0.005 + (iteration * 0.001)
+            # Calculate initial limit price (0.5% offset)
+            price_offset_pct = 0.005
+            if order_type == 'buy':
+                limit_price = current_price * (1 + price_offset_pct)
+            else:  # sell
+                limit_price = current_price * (1 - price_offset_pct)
 
-                if order_type == 'buy':
-                    limit_price = current_price * (1 + price_offset_pct)
-                    logger.info(f"🔄 Iteration {iteration + 1}: Limit buy at ${limit_price:.4f} (current: ${current_price:.4f})")
-                else:  # sell
-                    limit_price = current_price * (1 - price_offset_pct)
-                    logger.info(f"🔄 Iteration {iteration + 1}: Limit sell at ${limit_price:.4f} (current: ${current_price:.4f})")
+            # Place initial limit order
+            current_order_id = self.place_limit_order(pair, order_type, volume, limit_price, stop_loss)
+            if not current_order_id:
+                logger.warning("Initial limit order failed, falling back to market order")
+                return self.place_market_order(pair, order_type, volume, stop_loss)
 
-                # Try limit order
-                limit_order_id = self.place_limit_order(pair, order_type, volume, limit_price, stop_loss)
-                if not limit_order_id:
-                    logger.warning(f"Limit order failed on iteration {iteration + 1}")
-                    if iteration == max_iterations - 1:
-                        logger.warning("All limit order attempts failed, falling back to market order")
-                        return self.place_market_order(pair, order_type, volume, stop_loss)
-                    continue
+            logger.info(f"📋 Initial limit {order_type} at ${limit_price:.4f} (current: ${current_price:.4f}) - Order: {current_order_id}")
 
-                # Wait for limit order to complete (2 minutes per iteration)
-                if self.wait_for_order_completion(limit_order_id, timeout_seconds=120):
-                    logger.info(f"✅ Limit order {limit_order_id} completed successfully on iteration {iteration + 1}")
-                    return limit_order_id
-                else:
-                    logger.warning(f"❌ Limit order {limit_order_id} timed out on iteration {iteration + 1}")
-                    if iteration == max_iterations - 1:
-                        logger.warning("All limit order iterations timed out, falling back to market order")
-                        return self.place_market_order(pair, order_type, volume, stop_loss)
+            # Monitor and refresh price for up to 3 minutes
+            start_time = time.time()
+            last_refresh_time = start_time
+            refresh_interval = 30  # Refresh price every 30 seconds
 
-            # This should never be reached, but fallback just in case
-            logger.warning("Unexpected end of iterations, falling back to market order")
+            while time.time() - start_time < 180:  # 3 minute timeout
+                # Check if current order is filled
+                if self.is_order_filled(current_order_id):
+                    logger.info(f"✅ Limit order {current_order_id} completed successfully")
+                    return current_order_id
+
+                # Refresh limit price every 30 seconds
+                if time.time() - last_refresh_time >= refresh_interval:
+                    # Get fresh price
+                    new_price = self.get_current_price(pair)
+                    if new_price:
+                        # Calculate new limit price based on fresh market price
+                        if order_type == 'buy':
+                            new_limit_price = new_price * (1 + price_offset_pct)
+                        else:  # sell
+                            new_limit_price = new_price * (1 - price_offset_pct)
+
+                        # Only update if price moved significantly (>0.1% change)
+                        price_change_pct = abs(new_limit_price - limit_price) / limit_price
+                        if price_change_pct > 0.001:  # 0.1% threshold
+                            logger.info(f"🔄 Price refresh: ${limit_price:.4f} → ${new_limit_price:.4f} (market: ${new_price:.4f})")
+
+                            # Cancel current order
+                            if self.cancel_order(current_order_id):
+                                logger.info(f"❌ Cancelled order {current_order_id} for price refresh")
+                            else:
+                                logger.warning(f"Failed to cancel order {current_order_id}")
+
+                            # Place new order at updated price
+                            current_order_id = self.place_limit_order(pair, order_type, volume, new_limit_price, stop_loss)
+                            if current_order_id:
+                                limit_price = new_limit_price
+                                last_refresh_time = time.time()
+                                logger.info(f"📋 New limit {order_type} at ${limit_price:.4f} - Order: {current_order_id}")
+                            else:
+                                logger.warning("Failed to place refreshed limit order")
+                                break
+                        else:
+                            last_refresh_time = time.time()  # Reset timer even if price didn't change much
+
+                # Wait before next check
+                time.sleep(5)  # Check every 5 seconds
+
+            # Timeout reached - cancel any pending order and fallback to market
+            logger.warning("Smart order timed out after 3 minutes, falling back to market order")
+            if current_order_id and not self.is_order_filled(current_order_id):
+                self.cancel_order(current_order_id)
+                logger.info(f"Cancelled pending order {current_order_id}")
+
             return self.place_market_order(pair, order_type, volume, stop_loss)
 
         except Exception as e:

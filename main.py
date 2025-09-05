@@ -86,7 +86,7 @@ class TradingAgent:
             
             # Step 4: Get RAG recommendation for position switching
             recommendation = await self._step4_get_rag_recommendation()
-            
+
             # Step 5: Execute market orders if switching recommended
             if recommendation and recommendation.get('action') == 'switch':
                 await self._step5_execute_market_orders(recommendation)
@@ -318,15 +318,15 @@ class TradingAgent:
     async def _step4_get_rag_recommendation(self) -> Optional[Dict]:
         """Step 4: Get RAG recommendation for position switching"""
         logger.info("Step 4: Getting RAG recommendation for position switching")
-        
+
         # Get RAG recommendation
         recommendation = self.opportunity_service.get_rag_recommendation(self.kraken_service, self.openai_service)
-        
+
         if recommendation:
             logger.info(f"RAG recommendation: {recommendation.get('action', 'unknown')} - {recommendation.get('reasoning', 'no reasoning')}")
         else:
             logger.info("No RAG recommendation available")
-        
+
         return recommendation
     
     async def _step5_execute_market_orders(self, recommendation: Dict):
@@ -417,7 +417,7 @@ class TradingAgent:
                 except (TypeError, ValueError):
                     usd_balance = 0.0
 
-                if usd_balance <= 10:
+                if usd_balance <= 1:
                     logger.warning(f"Insufficient USD balance (${usd_balance:.2f}) for purchases")
                 elif len(recommended_assets) == 1:
                     # Single asset recommendation - use complete reallocation

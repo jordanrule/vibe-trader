@@ -1,13 +1,13 @@
 # Vibe Trader
 
 ## Overview
-An intelligent cryptocurrency trading agent that monitors Telegram messages for crypto sentiment, validates trade opportunities on Kraken, and executes trades with ML-guided decision making. The system operates with a medium-term bias, focusing on maintaining positions for up to 4 hours to capture sustained bullish sentiment while utilizing advanced order execution strategies for optimal trade execution.
+Vibe Trader is a cryptocurrency trading agent that watches Telegram for signals, checks them on Kraken, and makes portfolio decisions with help from OpenAI. It favors medium‑term moves, typically holding up to 4 hours, and uses careful order execution to get in and out efficiently.
 
 ### Notes on Vibe Coding
 
-Vibe Trader was developed through an exploratory "vibe coding" approach, which is reflected in the code quality and current test coverage. This development methodology excels at rapidly prototyping complex integrations across multiple APIs to create a functional, cohesive system. The approach successfully demonstrated how Telegram sentiment monitoring, OpenAI analysis, Kraken trading, and machine learning can be combined into a working cryptocurrency trading agent.
+This project was built with an exploratory “vibe coding” approach. That means we prioritized learning quickly and stitching together real APIs into something useful. Along the way, we proved that Telegram sentiment, OpenAI analysis, Kraken trading, and simple learning signals can work together as a practical trading loop.
 
-For production deployment with team maintenance, a complete rewrite from scratch would be recommended. The current implementation serves as an excellent design document, having validated key architectural decisions and API integrations. Future development should prioritize comprehensive test coverage from the initial implementation phase, as extensive automated testing is essential for maintaining system reliability when multiple developers are involved.
+If you plan to run this in a team setting, a fresh implementation is recommended. Treat this codebase as a design reference that validated the core ideas and integrations. In production, invest in thorough test coverage from day one so changes remain safe and predictable over time.
 
 ## Getting Started
 
@@ -29,24 +29,8 @@ For production deployment with team maintenance, a complete rewrite from scratch
 | `STOP_LOSS_PERCENTAGE` | Stop-loss protection percentage below entry price | `20` | **Note**: Currently implemented as hardcoded values (10% or 20%) in code, environment variable not yet integrated |
 | `LIVE_MODE` | Enable live trading (vs paper trading) | `false` | Set to `true` for actual trade execution |
 
-### API Setup Instructions
-
-#### Telegram Bot Setup
-1. **Create a Telegram Bot**: Message [@BotFather](https://t.me/botfather) on Telegram with `/newbot` to create your bot and receive your `TELEGRAM_BOT_TOKEN`
-2. **Get Chat ID**: Add your bot to the desired Telegram channel/group and send a message, then use `https://api.telegram.org/bot<YourBOTToken>/getUpdates` to find the chat ID
-3. **Forward Messages to Bot**: Telegram channels must be forwarded to your bot using [@junction_bot](https://t.me/junction_bot) or similar forwarding service, as bots cannot directly access channel messages
-
-#### OpenAI API Setup
-1. **Create Account**: Sign up at [OpenAI Platform](https://platform.openai.com/)
-2. **Generate API Key**: Navigate to API Keys section and create a new secret key
-3. **Billing Setup**: Configure billing to enable API usage
-4. **Environment Variable**: Set `OPENAI_API_KEY` with your generated key
-
-#### Kraken API Setup
-1. **Create Account**: Sign up at [Kraken Exchange](https://www.kraken.com/)
-2. **Enable API**: Go to Settings → API → Generate New Key
-3. **Configure Permissions**: Enable necessary permissions (Query Funds, Query Open Orders, Query Closed Orders, Create & Modify Orders)
-4. **Environment Variables**: Set both `KRAKEN_API_KEY` and `KRAKEN_SECRET`
+### API Setup
+Set up the required API accounts and keys according to each provider’s documentation, then export the environment variables listed above. That’s all the system needs to run.
 
 ### Quick Start
 The easiest way to get Vibe Trader running is with these simple steps:
@@ -54,7 +38,7 @@ The easiest way to get Vibe Trader running is with these simple steps:
 ```bash
 # 1. Create and activate virtual environment (recommended Python 3.8+)
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -95,27 +79,13 @@ export LIVE_MODE=false
 python run_system.py
 ```
 
-#### Virtual Environment Commands by Operating System
-
-**macOS/Linux:**
+#### Virtual Environment Commands (macOS/Linux)
 ```bash
 # Create virtual environment
 python3 -m venv venv
 
 # Activate virtual environment
 source venv/bin/activate
-
-# Deactivate when done
-deactivate
-```
-
-**Windows:**
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-venv\Scripts\activate
 
 # Deactivate when done
 deactivate
@@ -129,15 +99,15 @@ deactivate
 ## Implementation Strategy
 
 ### Geographic & Regulatory Considerations
-- **Trading Jurisdiction**: Operates in Texas, where Kraken maintains the largest quantity of available cryptocurrencies, providing optimal market depth and liquidity for trading operations
-- **Position Restrictions**: Adheres to Texas regulations prohibiting short-selling of cryptocurrencies except for institutional investors, focusing exclusively on long positions
-- **Sentiment Utilization**: Leverages Telegram sentiment for medium-term directional guidance rather than explicit entry/exit point marking, allowing the system to capture sustained market movements
+- **Trading Jurisdiction**: Operates in Texas, where Kraken offers broad spot coverage and solid liquidity
+- **Position Restrictions**: Long-only, aligned with local restrictions on shorting for non‑institutional traders
+- **Sentiment Utilization**: Uses Telegram sentiment as directional context, aiming to ride sustained moves rather than scalp entries/exits
 
 ### OpenAI Prompt Strategies
-- **Sentiment Analysis**: Uses structured prompts with historical performance context, technical indicators, and source trust scores to evaluate message sentiment and asset identification
-- **Portfolio Analysis**: Employs RAG (Retrieval-Augmented Generation) with position-specific context, including current holdings, technical indicators, and trust scores to make holding vs switching decisions
-- **Trade Decision Logic**: Arrives at current trade decisions by weighing sentiment strength against technical confirmation, transaction costs, and existing position performance
-- **Holding Bias**: Prompts include explicit preferences to maintain positions until MAX_TRADE_LIFETIME_HOURS expires unless compelling new opportunities with high trust scores emerge
+- **Sentiment Analysis**: Structured prompts blend historical performance context, technicals, and source trust to interpret messages
+- **Portfolio Analysis**: RAG evaluates current holdings against new ideas with indicators and trust scores to recommend hold vs switch
+- **Trade Decision Logic**: Considers sentiment strength, technical confirmation, costs, and how current positions are doing
+- **Holding Bias**: Prefers holding until `MAX_TRADE_LIFETIME_HOURS` unless a clearly better, high‑trust opportunity appears
 
 ## Architecture
 - **Main Loop** (`main.py`): Service-oriented orchestrator running every 15 minutes via `run_system.py`

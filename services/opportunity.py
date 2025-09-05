@@ -798,10 +798,23 @@ TECHNICAL INDICATORS:
                 current_positions_summary.append(f"{asset}: {balance} units")
             
             # Find the best opportunity based on trust score and confidence
+            # Exclude opportunities for assets we already hold
             best_opportunity = None
             best_score = 0
 
+            current_asset_names = set()
+            for asset_name in current_positions.keys():
+                # Handle asset name mapping (e.g., XETH -> ETH)
+                if asset_name.startswith('X') and len(asset_name) > 1:
+                    current_asset_names.add(asset_name[1:])  # XETH -> ETH
+                current_asset_names.add(asset_name)  # Also keep original name
+
             for item in portfolio_data:
+                asset = item['asset']
+                # Skip if we already hold this asset
+                if asset in current_asset_names:
+                    continue
+
                 trust_score = item.get('trust_score', 0.5)
                 confidence = item.get('confidence', 0.5)
                 combined_score = (trust_score + confidence) / 2
@@ -809,7 +822,17 @@ TECHNICAL INDICATORS:
                     best_score = combined_score
                     best_opportunity = item
 
-            best_asset = best_opportunity['asset'] if best_opportunity else 'ETH'
+            # If no opportunities remain (all are already held), recommend holding
+            if not best_opportunity:
+                return {
+                    'action': 'hold',
+                    'reasoning': 'All available opportunities are for assets already held in the portfolio.',
+                    'recommended_assets': list(current_positions.keys()) if current_positions else [],
+                    'expected_pnl_pct': 0.0,
+                    'risk_score': 3
+                }
+
+            best_asset = best_opportunity['asset']
 
             prompt = f"""
 You are an expert cryptocurrency portfolio manager. Analyze this portfolio of opportunities and current positions to recommend the optimal trading action.
@@ -832,6 +855,9 @@ Consider:
 - Technical indicators alignment
 - Source credibility and confidence scores
 - Trust scores and historical performance
+
+Holding preference:
+- Prefer to maintain the current position to minimize transaction costs and churn unless the identified opportunity offers a clearly superior risk-adjusted return (after costs) with strong trust and conviction.
 
 BEST OPPORTUNITY IDENTIFIED: {best_asset} (highest combined trust + confidence score)
 
