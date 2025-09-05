@@ -11,23 +11,18 @@ logger = logging.getLogger(__name__)
 
 # Known signal sources detected from Telegram message analysis
 KNOWN_SIGNAL_SOURCES = {
-    'Binance Futures': 'Binance Futures',
-    'BingX Futures': 'BingX Futures', 
-    'Bitget Futures': 'Bitget Futures',
-    'ByBit USDT': 'ByBit USDT',
-    'ByBit Futures': 'ByBit Futures',
-    'KuCoin Futures': 'KuCoin Futures',
-    'OKX Futures': 'OKX Futures',
-    'Gate.io Futures': 'Gate.io Futures',
-    'Binance': 'Binance Spot',
-    'Bitget': 'Bitget Spot',
+    'RAVEN Signals Pro - Crypto Forex': 'Raven Signals Pro',
     'ravensignalspro.com': 'Raven Signals Pro',
     'altsignals.io': 'AltSignals.io',
+    'CryptoSignals.Org (free)': 'CryptoSignals.Org (Free)',
     'CryptoSignals.Org': 'CryptoSignals.Org (Free)',
-    'Trading View': 'TradingView Analysis',
-    'Technical Analysis': 'Technical Analysis',
-    'News': 'News/Fundamental Analysis',
-    'Unknown': 'Unknown Source'
+    'Coinbase Crypto Signals': 'Coinbase Crypto Signals',
+    'Evening Trader Official ®': 'Evening Trader Official',
+    'CryptoNinjas Trading 🥷🏿': 'CryptoNinjas Trading',
+    'CoinCodeCap Classic': 'CoinCodeCap Classic',
+    'Fat Pig Signals': 'Fat Pig Signals',
+    'My Crypto Paradise OFFICIAL 🌴': 'My Crypto Paradise Official',
+    'Crypto Inner Circle (Free)': 'Crypto Inner Circle (Free)'
 }
 
 class OpenAIService(BaseService):
@@ -53,12 +48,32 @@ class OpenAIService(BaseService):
     def map_source_to_known(self, openai_source: str) -> str:
         """Map OpenAI detected source to known source categories"""
         openai_lower = openai_source.lower()
-        
-        # Direct mapping
+
+        # Direct mapping with improved header matching
         for known_key, known_value in KNOWN_SIGNAL_SOURCES.items():
             if known_key.lower() in openai_lower:
                 return known_value
-        
+
+        # Check for exact header matches from recent analysis
+        if 'raven signals pro' in openai_lower and 'crypto forex' in openai_lower:
+            return 'Raven Signals Pro'
+        if 'cryptosignals.org' in openai_lower:
+            return 'CryptoSignals.Org (Free)'
+        if 'coinbase crypto signals' in openai_lower:
+            return 'Coinbase Crypto Signals'
+        if 'evening trader official' in openai_lower:
+            return 'Evening Trader Official'
+        if 'cryptoninjas trading' in openai_lower:
+            return 'CryptoNinjas Trading'
+        if 'coincodecap classic' in openai_lower:
+            return 'CoinCodeCap Classic'
+        if 'fat pig signals' in openai_lower:
+            return 'Fat Pig Signals'
+        if 'my crypto paradise' in openai_lower and 'official' in openai_lower:
+            return 'My Crypto Paradise Official'
+        if 'crypto inner circle' in openai_lower:
+            return 'Crypto Inner Circle (Free)'
+
         # Fuzzy matching for common patterns
         if any(word in openai_lower for word in ['binance', 'futures']):
             if 'binance' in openai_lower:
@@ -87,28 +102,51 @@ class OpenAIService(BaseService):
     def detect_message_source(self, message: str) -> str:
         """Detect the source of a trading message"""
         message_lower = message.lower()
-        
-        # Check for known signal sources
+
+        # Check for known signal sources with improved header matching
         for source_key in KNOWN_SIGNAL_SOURCES.keys():
             if source_key.lower() in message_lower:
                 return KNOWN_SIGNAL_SOURCES[source_key]
-        
+
+        # Check for specific header patterns from recent analysis
+        lines = message.split('\n')
+        first_line = lines[0] if lines else message
+
+        if 'raven signals pro' in first_line.lower() and 'crypto forex' in first_line.lower():
+            return 'Raven Signals Pro'
+        if 'cryptosignals.org' in first_line.lower():
+            return 'CryptoSignals.Org (Free)'
+        if 'coinbase crypto signals' in first_line.lower():
+            return 'Coinbase Crypto Signals'
+        if 'evening trader official' in first_line.lower():
+            return 'Evening Trader Official'
+        if 'cryptoninjas trading' in first_line.lower():
+            return 'CryptoNinjas Trading'
+        if 'coincodecap classic' in first_line.lower():
+            return 'CoinCodeCap Classic'
+        if 'fat pig signals' in first_line.lower():
+            return 'Fat Pig Signals'
+        if 'my crypto paradise' in first_line.lower() and 'official' in first_line.lower():
+            return 'My Crypto Paradise Official'
+        if 'crypto inner circle' in first_line.lower():
+            return 'Crypto Inner Circle (Free)'
+
         # Check for exchange patterns
         if any(exchange in message_lower for exchange in ['binance', 'bybit', 'bitget', 'kucoin', 'okx']):
             return 'Multi-Exchange Signal'
-        
+
         # Check for signal service patterns
         if any(pattern in message_lower for pattern in ['signal', 'alert', 'call']):
             return 'Trading Signal Service'
-        
+
         # Check for technical analysis patterns
         if any(pattern in message_lower for pattern in ['technical', 'analysis', 'chart', 'indicator']):
             return 'Technical Analysis'
-        
+
         # Check for news patterns
         if any(pattern in message_lower for pattern in ['news', 'announcement', 'update']):
             return 'News/Fundamental Analysis'
-        
+
         return 'Unknown Source'
     
     def analyze_sentiment(self, message: str, asset: str, pair_name: str, technical_indicators: Dict) -> Optional[Dict]:
