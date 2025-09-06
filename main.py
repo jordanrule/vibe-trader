@@ -42,7 +42,7 @@ class TradingAgent:
             'kraken_api_key': os.getenv('KRAKEN_API_KEY'),
             'kraken_secret': os.getenv('KRAKEN_SECRET'),
             'live_mode': os.getenv('LIVE_MODE', 'false').lower() == 'true',
-            'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '4')),
+            'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '6')),
             'stop_loss_percentage': float(os.getenv('STOP_LOSS_PERCENTAGE', '20'))
         }
         

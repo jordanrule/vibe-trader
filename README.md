@@ -1,7 +1,7 @@
 # Vibe Trader
 
 ## Overview
-Vibe Trader is a cryptocurrency trading agent that watches Telegram for signals, checks them on Kraken, and makes portfolio decisions with help from OpenAI. It favors medium‑term moves, typically holding up to 4 hours, and uses careful order execution to get in and out efficiently.
+Vibe Trader is a cryptocurrency trading agent that watches Telegram for signals, checks them on Kraken, and makes portfolio decisions with help from OpenAI. It favors medium‑term moves, typically holding up to 6 hours, and uses careful order execution to get in and out efficiently.
 
 ### Notes on Vibe Coding
 
@@ -25,7 +25,7 @@ If you plan to run this in a team setting, a fresh implementation is recommended
 #### Optional Variables
 | Variable | Description | Default | Notes |
 |----------|-------------|---------|-------|
-| `MAX_TRADE_LIFETIME_HOURS` | Hours before opportunities expire | `4` | Controls position holding duration |
+| `MAX_TRADE_LIFETIME_HOURS` | Hours before opportunities expire | `6` | Controls position holding duration |
 | `STOP_LOSS_PERCENTAGE` | Stop-loss protection percentage below entry price | `20` | **Note**: Currently implemented as hardcoded values (10% or 20%) in code, environment variable not yet integrated |
 | `LIVE_MODE` | Enable live trading (vs paper trading) | `false` | Set to `true` for actual trade execution |
 
@@ -72,7 +72,7 @@ export KRAKEN_API_KEY="your_kraken_key"
 export KRAKEN_SECRET="your_kraken_secret"
 
 # Optional: Configure trading parameters
-export MAX_TRADE_LIFETIME_HOURS=4
+export MAX_TRADE_LIFETIME_HOURS=6
 export LIVE_MODE=false
 
 # Run the trading system
@@ -98,7 +98,7 @@ python run_system.py
 - **Holding Bias**: Prefers holding until `MAX_TRADE_LIFETIME_HOURS` unless a clearly better, high‑trust opportunity appears
 
 ## Architecture
-- **Main Loop** (`main.py`): Service-oriented orchestrator running every 15 minutes via `run_system.py`
+- **Main Loop** (`main.py`): Service-oriented orchestrator running every hour via `run_system.py`
 - **Telegram Service** (`services/telegram.py`): Handles message polling and update tracking
 - **Kraken Service** (`services/kraken.py`): Manages market data, balance queries, and order execution
 - **OpenAI Service** (`services/openai.py`): Processes sentiment analysis and portfolio recommendations
@@ -107,8 +107,10 @@ python run_system.py
 
 ## Workflow
 
+It is recommended that it runs every hour to check new opportunities and rebalance it's single holding.  At any given cycle it chooses a single cryptocurrency based on sentiment and techicals.  The MAX_TRADE_LIFETIME_HOURS determines how long an opportunity exists, as well as how exit time for PnL is calculated for the bandit model.
+
 ### 1. Opportunity Lifecycle Management
-- **Expired Opportunity Cleanup**: Automatically clears opportunities older than `MAX_TRADE_LIFETIME_HOURS` (default: 4 hours)
+- **Expired Opportunity Cleanup**: Automatically clears opportunities older than `MAX_TRADE_LIFETIME_HOURS` (default: 6 hours)
 - **Position Consistency Bias**: System maintains existing positions until full expiry period to capture medium-term bullish sentiment trends
 - **PnL Recording**: Expired opportunities trigger buy-and-hold PnL calculations based on entry price vs current market price
 - **State Management**: Removes expired opportunities from active tracking while preserving performance data
@@ -170,7 +172,7 @@ python run_system.py
 - **OpportunityService**: Technical analysis, bandit model management, and opportunity lifecycle tracking
 
 ### Key Configuration Variables
-- `MAX_TRADE_LIFETIME_HOURS`: Opportunity expiry time (default: 4)
+- `MAX_TRADE_LIFETIME_HOURS`: Opportunity expiry time (default: 6)
 - `STOP_LOSS_PERCENTAGE`: Stop-loss protection level (default: 20)
 - `TELEGRAM_BOT_TOKEN`: Telegram Bot API authentication
 - `KRAKEN_API_KEY`: Kraken API authentication

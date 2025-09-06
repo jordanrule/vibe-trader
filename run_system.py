@@ -52,7 +52,7 @@ class LiveTradingRunner:
             # Calculate time range
             if bootstrap:
                 # For bootstrap, look back max_trade_lifetime_hours
-                max_trade_lifetime_hours = int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '4'))
+                max_trade_lifetime_hours = int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '6'))
                 from_time = current_time - timedelta(hours=max_trade_lifetime_hours)
                 logger.info(f"🚀 Bootstrap mode: looking back {max_trade_lifetime_hours} hours")
             else:

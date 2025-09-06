@@ -16,7 +16,7 @@ class OpportunityService(BaseService):
     
     def __init__(self, config: Dict[str, any]):
         super().__init__(config)
-        self.max_trade_lifetime_hours = config.get('max_trade_lifetime_hours', 4)
+        self.max_trade_lifetime_hours = config.get('max_trade_lifetime_hours', 6)
         self.opportunities = self.load_opportunities()
         self.bandit_source_stats = self.load_bandit_model()
     

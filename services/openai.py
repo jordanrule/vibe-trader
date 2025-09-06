@@ -12,16 +12,19 @@ logger = logging.getLogger(__name__)
 # Known signal sources detected from Telegram message analysis
 KNOWN_SIGNAL_SOURCES = {
     'RAVEN Signals Pro - Crypto Forex': 'Raven Signals Pro',
+    'Binance Killers': 'Binance Killers',
+    'BitDegree Signals': 'BitDegree Signals',
+    'Rocket Wallet Signals': 'Rocket Wallet Signals',
     'ravensignalspro.com': 'Raven Signals Pro',
     'altsignals.io': 'AltSignals.io',
     'CryptoSignals.Org (free)': 'CryptoSignals.Org (Free)',
     'CryptoSignals.Org': 'CryptoSignals.Org (Free)',
     'Coinbase Crypto Signals': 'Coinbase Crypto Signals',
     'Evening Trader Official ®': 'Evening Trader Official',
-    'CryptoNinjas Trading 🥷🏿': 'CryptoNinjas Trading',
+    'CryptoNinjas Trading': 'CryptoNinjas Trading',
     'CoinCodeCap Classic': 'CoinCodeCap Classic',
     'Fat Pig Signals': 'Fat Pig Signals',
-    'My Crypto Paradise OFFICIAL 🌴': 'My Crypto Paradise Official',
+    'My Crypto Paradise OFFICIAL': 'My Crypto Paradise Official',
     'Crypto Inner Circle (Free)': 'Crypto Inner Circle (Free)'
 }
 
@@ -58,111 +61,7 @@ class OpenAIService(BaseService):
                 self.client = None
         else:
             logger.warning("OpenAI API key not found. Sentiment analysis will be disabled.")
-    
-    def map_source_to_known(self, openai_source: str) -> str:
-        """Map OpenAI detected source to known source categories"""
-        openai_lower = openai_source.lower()
 
-        # Direct mapping with improved header matching
-        for known_key, known_value in KNOWN_SIGNAL_SOURCES.items():
-            if known_key.lower() in openai_lower:
-                return known_value
-
-        # Check for exact header matches from recent analysis
-        if 'raven signals pro' in openai_lower and 'crypto forex' in openai_lower:
-            return 'Raven Signals Pro'
-        if 'cryptosignals.org' in openai_lower:
-            return 'CryptoSignals.Org (Free)'
-        if 'coinbase crypto signals' in openai_lower:
-            return 'Coinbase Crypto Signals'
-        if 'evening trader official' in openai_lower:
-            return 'Evening Trader Official'
-        if 'cryptoninjas trading' in openai_lower:
-            return 'CryptoNinjas Trading'
-        if 'coincodecap classic' in openai_lower:
-            return 'CoinCodeCap Classic'
-        if 'fat pig signals' in openai_lower:
-            return 'Fat Pig Signals'
-        if 'my crypto paradise' in openai_lower and 'official' in openai_lower:
-            return 'My Crypto Paradise Official'
-        if 'crypto inner circle' in openai_lower:
-            return 'Crypto Inner Circle (Free)'
-
-        # Fuzzy matching for common patterns
-        if any(word in openai_lower for word in ['binance', 'futures']):
-            if 'binance' in openai_lower:
-                return 'Binance Futures'
-            elif any(ex in openai_lower for ex in ['bingx', 'bing']):
-                return 'BingX Futures'
-            elif any(ex in openai_lower for ex in ['bitget', 'bit']):
-                return 'Bitget Futures'
-            elif any(ex in openai_lower for ex in ['bybit', 'by']):
-                return 'ByBit USDT'
-            elif any(ex in openai_lower for ex in ['kucoin', 'ku']):
-                return 'KuCoin Futures'
-            elif any(ex in openai_lower for ex in ['okx', 'ok']):
-                return 'OKX Futures'
-            else:
-                return 'Multi-Exchange Futures Signal'
-        elif any(word in openai_lower for word in ['signal', 'trading']):
-            return 'Trading Signal Service'
-        elif any(word in openai_lower for word in ['technical', 'analysis']):
-            return 'Technical Analysis'
-        elif any(word in openai_lower for word in ['news', 'fundamental']):
-            return 'News/Fundamental Analysis'
-        else:
-            return 'Unknown Source'
-    
-    def detect_message_source(self, message: str) -> str:
-        """Detect the source of a trading message"""
-        message_lower = message.lower()
-
-        # Check for known signal sources with improved header matching
-        for source_key in KNOWN_SIGNAL_SOURCES.keys():
-            if source_key.lower() in message_lower:
-                return KNOWN_SIGNAL_SOURCES[source_key]
-
-        # Check for specific header patterns from recent analysis
-        lines = message.split('\n')
-        first_line = lines[0] if lines else message
-
-        if 'raven signals pro' in first_line.lower() and 'crypto forex' in first_line.lower():
-            return 'Raven Signals Pro'
-        if 'cryptosignals.org' in first_line.lower():
-            return 'CryptoSignals.Org (Free)'
-        if 'coinbase crypto signals' in first_line.lower():
-            return 'Coinbase Crypto Signals'
-        if 'evening trader official' in first_line.lower():
-            return 'Evening Trader Official'
-        if 'cryptoninjas trading' in first_line.lower():
-            return 'CryptoNinjas Trading'
-        if 'coincodecap classic' in first_line.lower():
-            return 'CoinCodeCap Classic'
-        if 'fat pig signals' in first_line.lower():
-            return 'Fat Pig Signals'
-        if 'my crypto paradise' in first_line.lower() and 'official' in first_line.lower():
-            return 'My Crypto Paradise Official'
-        if 'crypto inner circle' in first_line.lower():
-            return 'Crypto Inner Circle (Free)'
-
-        # Check for exchange patterns
-        if any(exchange in message_lower for exchange in ['binance', 'bybit', 'bitget', 'kucoin', 'okx']):
-            return 'Multi-Exchange Signal'
-
-        # Check for signal service patterns
-        if any(pattern in message_lower for pattern in ['signal', 'alert', 'call']):
-            return 'Trading Signal Service'
-
-        # Check for technical analysis patterns
-        if any(pattern in message_lower for pattern in ['technical', 'analysis', 'chart', 'indicator']):
-            return 'Technical Analysis'
-
-        # Check for news patterns
-        if any(pattern in message_lower for pattern in ['news', 'announcement', 'update']):
-            return 'News/Fundamental Analysis'
-
-        return 'Unknown Source'
-    
     def analyze_sentiment(self, message: str, asset: str, pair_name: str, technical_indicators: Dict) -> Optional[Dict]:
         """Send message and technical data to OpenAI for sentiment analysis"""
         
@@ -176,21 +75,10 @@ class OpenAIService(BaseService):
             return None
         
         try:
-            # Detect the message source
-            detected_source = self.detect_message_source(message)
-
-            # Get trust score for this source (historical performance from inception to max_trade_lifetime_hours)
-            trust_score = 0.5  # Default neutral
-            try:
-                from services.opportunity import OpportunityService
-                # We need to get the opportunity service instance, but for now we'll use a simple lookup
-                # This should be passed in from the caller
-                opportunity_service = OpportunityService({})
-                trust_score = opportunity_service.get_source_trust_score(detected_source)
-            except:
-                pass
-
             # Create comprehensive prompt for OpenAI
+            # Format KNOWN_SIGNAL_SOURCES for the prompt
+            known_sources_formatted = "\n".join([f"  - {k}: {v}" for k, v in KNOWN_SIGNAL_SOURCES.items()])
+
             prompt = f"""
 You are an expert cryptocurrency trader focused on risk-adjusted profit maximization. Analyze the following trading message and technical indicators to provide trading recommendations.
 
@@ -199,7 +87,8 @@ MESSAGE TO ANALYZE:
 
 ASSET: {asset} ({pair_name})
 
-SOURCE TRUST SCORE: {trust_score:.2f} (historical performance from inception to {getattr(self, 'max_trade_lifetime_hours', 4)}h based on buy-and-hold returns)
+KNOWN SIGNAL SOURCES (identify which one this message comes from, if any):
+{known_sources_formatted}
 
 TECHNICAL INDICATORS:
 - Current Price: ${technical_indicators.get('current_price', 0):.4f}
@@ -219,23 +108,29 @@ TECHNICAL INDICATORS:
 - 24h Price Change: {technical_indicators.get('price_change_24h', 0):.2f}%
 - Current Volume vs 10-period avg: {(technical_indicators.get('current_volume', 0) / max(technical_indicators.get('avg_volume_10', 1), 1)):.1f}x
 
-DETECTED SOURCE: {detected_source}
-
 TASK:
-Analyze the sentiment of the message combined with the technical indicators. Also identify the signal source type from the message content.
+1. Identify the signal source from the KNOWN SIGNAL SOURCES list above, or classify as one of: Binance Futures, BingX Futures, Bitget Futures, ByBit USDT, KuCoin Futures, OKX Futures, Trading Signal Service, Technical Analysis, News/Fundamental Analysis, Unknown Source
+2. Analyze the sentiment of the message combined with the technical indicators
+3. Provide trading recommendations
 
 RESPOND IN THIS EXACT JSON FORMAT:
 {{
-    "channel": "telegram", 
-    "source": "<signal source - try to identify from message content or use one of: Binance Futures, BingX Futures, Bitget Futures, ByBit USDT, KuCoin Futures, OKX Futures, Trading Signal Service, Technical Analysis, News/Fundamental Analysis, Unknown Source>",
+    "channel": "telegram",
+    "source": "<identified signal source from the KNOWN SIGNAL SOURCES list or fallback category>",
     "sentiment": "bullish|bearish|neutral",
     "action": "long|short|hold",
     "entry_price": <recommended entry price as number>,
     "exit_price": <recommended exit/take-profit price as number>,
     "duration_hours": <recommended hold duration in hours as integer>,
     "confidence": <confidence score 0.0-1.0>,
-    "reasoning": "<brief explanation of your analysis>"
+    "reasoning": "<brief explanation of your analysis including source identification>"
 }}
+
+SOURCE IDENTIFICATION RULES:
+- First, check if the message matches any of the KNOWN SIGNAL SOURCES listed above
+- Look for exact name matches, URLs, or clear references to these sources
+- If no match found, classify based on content (exchange signals, general trading signals, technical analysis, news, etc.)
+- Be specific when possible - prefer exact matches from KNOWN SIGNAL SOURCES over generic categories
 
 Consider:
 1. Message sentiment (bullish/bearish tone, excitement level, credibility)
@@ -282,16 +177,25 @@ Adjust confidence based on source credibility - established exchanges should get
                     json_text = response_text.replace('```', '').strip()
                 
                 analysis = json.loads(json_text)
-                
+
                 # Validate required fields
                 required_fields = ['channel', 'source', 'sentiment', 'action', 'entry_price', 'exit_price', 'duration_hours', 'confidence', 'reasoning']
                 if all(field in analysis for field in required_fields):
-                    # Validate and map the source to known sources
-                    openai_source = analysis['source']
-                    mapped_source = self.map_source_to_known(openai_source)
-                    analysis['source'] = mapped_source
-                    analysis['detected_source'] = detected_source  # Add our detected source for comparison
-                    
+                    # OpenAI has already identified the source from our KNOWN_SIGNAL_SOURCES list
+                    identified_source = analysis['source']
+
+                    # Add trust score calculation based on the identified source
+                    trust_score = 0.5  # Default neutral
+                    try:
+                        from services.opportunity import OpportunityService
+                        opportunity_service = OpportunityService({'max_trade_lifetime_hours': 6})
+                        trust_score = opportunity_service.get_source_trust_score(identified_source)
+                    except:
+                        pass
+
+                    analysis['trust_score'] = trust_score
+                    logger.info(f"OpenAI identified source: {identified_source} (trust: {trust_score:.2f})")
+
                     return analysis
                 else:
                     logger.error(f"OpenAI response missing required fields: {response_text}")
