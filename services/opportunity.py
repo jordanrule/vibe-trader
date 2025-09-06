@@ -548,8 +548,9 @@ class OpportunityService(BaseService):
                     bal = float(balance)
                 except (TypeError, ValueError):
                     continue
-                if bal <= 0 or asset in stable_or_fiat_assets:
+                if bal <= 0:
                     continue
+                # Include all assets, including fiat/stable for allocation checking
                 current_positions[asset] = bal
 
             # If no opportunities but we have positions, ask OpenAI what to do
@@ -819,25 +820,40 @@ TECHNICAL INDICATORS:
             if best_opportunity and current_positions:
                 best_asset = best_opportunity['asset']
 
-                # Check if we already hold ONLY the recommended asset
+                # Check if we already hold the recommended asset
+                holding_recommended = False
                 holding_only_recommended = True
+
                 for pos_asset in current_positions.keys():
                     # Normalize for comparison
                     normalized_pos = pos_asset.replace('X', '').replace('.F', '')
                     normalized_rec = best_asset.replace('X', '').replace('.F', '')
 
-                    if normalized_pos != normalized_rec:
+                    if normalized_pos == normalized_rec:
+                        holding_recommended = True
+                    elif pos_asset not in stable_or_fiat_assets:  # Ignore fiat/stable assets
                         holding_only_recommended = False
-                        break
 
-                if holding_only_recommended:
-                    return {
-                        'action': 'hold',
-                        'reasoning': f'Already optimally positioned with {best_asset}.',
-                        'recommended_assets': [best_asset],
-                        'expected_pnl_pct': 0.0,
-                        'risk_score': 3
-                    }
+                # If we hold the recommended asset and have significant cash, consider reallocating
+                if holding_recommended:
+                    # Check if we have significant USD balance that could be used for more allocation
+                    usd_balance = current_positions.get('ZUSD', 0)
+                    if isinstance(usd_balance, str):
+                        usd_balance = float(usd_balance)
+
+                    # If we have more than $1 USD available, we could allocate more to the recommended asset
+                    if usd_balance > 1.0:
+                        logger.info(f"Detected ${usd_balance:.2f} USD available - could allocate more to {best_asset}")
+                        # Don't return hold - let the normal switching logic proceed
+                    else:
+                        # We have the recommended asset and minimal cash - truly optimally positioned
+                        return {
+                            'action': 'hold',
+                            'reasoning': f'Already optimally positioned with {best_asset} and minimal cash available.',
+                            'recommended_assets': [best_asset],
+                            'expected_pnl_pct': 0.0,
+                            'risk_score': 3
+                        }
 
             # If no opportunities found, recommend holding
             if not best_opportunity:

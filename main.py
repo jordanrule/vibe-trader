@@ -409,6 +409,7 @@ class TradingAgent:
 
                 if not assets_to_liquidate:
                     logger.info("✅ No assets to liquidate - already holding recommended asset")
+                    # Even if no assets to liquidate, we might still have cash to allocate to the recommended asset
                 else:
                     # Execute selective liquidation
                     logger.info(f"🧪 Selectively liquidating {len(assets_to_liquidate)} non-recommended positions")
