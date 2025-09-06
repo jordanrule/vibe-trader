@@ -494,8 +494,10 @@ class TradingAgent:
                     asset = recommended_assets[0]
                     logger.info(f"🎯 Complete 100% reallocation to single asset: {asset}")
 
-                    # Use 100% of available USD for the recommended asset (no safety buffer)
-                    usd_used = await self._execute_complete_reallocation(asset, usd_balance)
+                    # Use 95% of available USD to account for stop-loss margin and precision requirements
+                    usd_balance_buffered = usd_balance * 0.95
+                    logger.info(f"📊 Using buffered USD balance: ${usd_balance_buffered:.2f} (95% of ${usd_balance:.2f})")
+                    usd_used = await self._execute_complete_reallocation(asset, usd_balance_buffered)
                     if usd_used > 0:
                         logger.info(f"✅ Complete 100% reallocation successful: ${usd_used:.2f} deployed to {asset}")
                     else:
