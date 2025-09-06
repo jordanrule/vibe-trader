@@ -834,19 +834,33 @@ TECHNICAL INDICATORS:
                     elif pos_asset not in stable_or_fiat_assets:  # Ignore fiat/stable assets
                         holding_only_recommended = False
 
-                # If we hold the recommended asset and have significant cash, consider reallocating
+                # If we hold the recommended asset, check for available cash for additional allocation
                 if holding_recommended:
-                    # Check if we have significant USD balance that could be used for more allocation
-                    usd_balance = current_positions.get('ZUSD', 0)
-                    if isinstance(usd_balance, str):
-                        usd_balance = float(usd_balance)
+                    # Check balances directly for available cash (including fiat assets)
+                    total_cash = 0
+                    for asset, balance in balances.items():
+                        if asset in ['ZUSD', 'USDT', 'USDC']:  # Fiat assets
+                            try:
+                                if isinstance(balance, dict):
+                                    bal = float(balance.get('balance', 0) or 0)
+                                    hold = float(balance.get('hold_trade', 0) or 0)
+                                    available = bal - hold
+                                else:
+                                    available = float(balance)
 
-                    # If we have more than $1 USD available, we could allocate more to the recommended asset
-                    if usd_balance > 1.0:
-                        logger.info(f"Detected ${usd_balance:.2f} USD available - could allocate more to {best_asset}")
+                                if available > 0.01:
+                                    total_cash += available
+                            except (TypeError, ValueError):
+                                continue
+
+                    # If we have any meaningful cash available, proceed with allocation
+                    logger.info(f"Total cash detected: ${total_cash:.2f}")
+                    if total_cash > 0.1:  # Lower threshold - any meaningful cash should trigger allocation
+                        logger.info(f"Detected ${total_cash:.2f} cash available - can allocate more to {best_asset}")
                         # Don't return hold - let the normal switching logic proceed
                     else:
-                        # We have the recommended asset and minimal cash - truly optimally positioned
+                        # We have the recommended asset and truly minimal cash - optimally positioned
+                        logger.info(f"Truly minimal cash (${total_cash:.2f}) - optimally positioned")
                         return {
                             'action': 'hold',
                             'reasoning': f'Already optimally positioned with {best_asset} and minimal cash available.',

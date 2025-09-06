@@ -334,232 +334,119 @@ class TradingAgent:
         logger.info("Step 5: Executing market orders for position switching")
 
         try:
-            # Get available balances (excludes funds reserved by open orders)
+            # Get the single recommended asset from OpenAI
+            recommended_assets = recommendation.get('recommended_assets', [])
+            if not recommended_assets or len(recommended_assets) != 1:
+                logger.warning("No single asset recommendation received from OpenAI")
+                return
+
+            recommended_asset = recommended_assets[0]
+            logger.info(f"🎯 Single recommended asset: {recommended_asset}")
+
+            # Get current positions
             balances = self.kraken_service.get_available_balances()
             current_positions = {}
-            # Define fiat/stable assets to ignore for selling
-            stable_or_fiat_assets = {
-                'ZUSD', 'USD', 'ZEUR', 'EUR', 'ZGBP', 'GBP', 'ZCAD', 'CAD', 'ZJPY', 'JPY', 'ZCHF', 'CHF',
-                'USDT', 'USDC', 'DAI', 'PYUSD', 'RLUSD'
-            }
+
+            # Define fiat/stable assets
+            fiat_assets = {'ZUSD', 'USDT', 'USDC'}
+
             for asset, balance_entry in balances.items():
                 try:
                     if isinstance(balance_entry, dict):
-                        # BalanceEx format: {'balance': 'X', 'hold_trade': 'Y'}
                         balance = float(balance_entry.get('balance', 0) or 0)
                         hold_trade = float(balance_entry.get('hold_trade', 0) or 0)
                         available_bal = balance - hold_trade
-                        total_bal = balance
                     else:
-                        # Balance format: 'X'
                         available_bal = float(balance_entry)
-                        total_bal = available_bal
+                        balance = available_bal
                 except (TypeError, ValueError):
                     continue
 
-                # Skip fiat/stable assets
-                if asset in stable_or_fiat_assets:
+                # Include all assets with balance > 0
+                if balance > 0:
+                    current_positions[asset] = available_bal
+
+            logger.info(f"📊 Current positions: {list(current_positions.keys())}")
+
+            # Step 1: Liquidate ALL positions that are NOT the recommended asset
+            assets_to_liquidate = []
+            for asset in current_positions.keys():
+                # Don't liquidate fiat assets (we'll use them for buying)
+                if asset in fiat_assets:
                     continue
 
-                # Include positions with total balance > 0 (even if available is 0 due to holds)
-                if total_bal > 0:
-                    current_positions[asset] = available_bal  # Use available for trading, but track total
+                # Check if this asset matches the recommended asset
+                if self._assets_match(asset, recommended_asset):
+                    logger.info(f"⏸️  Keeping recommended asset: {asset}")
+                    continue
 
-            # Get recommended assets to determine what to keep vs liquidate
-            recommended_assets = recommendation.get('recommended_assets', [])
+                assets_to_liquidate.append(asset)
 
-            if not current_positions:
-                logger.info("No current positions to evaluate")
-            elif recommended_assets and len(recommended_assets) == 1:
-                # Single recommended asset - selective liquidation approach
-                recommended_asset = recommended_assets[0]
-                logger.info(f"🎯 Recommended asset: {recommended_asset}")
-
-                # Check if we already hold the recommended asset
-                already_holding_recommended = False
-                for held_asset in current_positions.keys():
-                    if (held_asset == recommended_asset or
-                        (recommended_asset == 'ETH' and held_asset in ['XETH', 'ETH.F']) or
-                        (recommended_asset == 'INJ' and held_asset in ['XINJ', 'INJ.F']) or
-                        (held_asset.replace('.F', '').replace('X', '') == recommended_asset.replace('.F', '').replace('X', ''))):
-                        already_holding_recommended = True
-                        logger.info(f"✅ Already holding recommended asset: {held_asset}")
-                        break
-
-                if already_holding_recommended:
-                    logger.info("🎯 Keeping current position in recommended asset, only liquidating others")
-                else:
-                    logger.info("🎯 Recommended asset not held, will liquidate all and reallocate 100%")
-
-                # Liquidate only assets that are NOT the recommended asset
-                assets_to_liquidate = []
-                for asset in current_positions.keys():
-                    should_liquidate = True
-
-                    # Check if this asset matches the recommended asset
-                    if (asset == recommended_asset or
-                        (recommended_asset == 'ETH' and asset in ['XETH', 'ETH.F']) or
-                        (recommended_asset == 'INJ' and asset in ['XINJ', 'INJ.F']) or
-                        (asset.replace('.F', '').replace('X', '') == recommended_asset.replace('.F', '').replace('X', ''))):
-                        should_liquidate = False
-                        logger.info(f"⏸️  Keeping position in recommended asset: {asset}")
-
-                    if should_liquidate:
-                        assets_to_liquidate.append(asset)
-
-                if not assets_to_liquidate:
-                    logger.info("✅ No assets to liquidate - already holding recommended asset")
-                    # Even if no assets to liquidate, we might still have cash to allocate to the recommended asset
-                else:
-                    # Execute selective liquidation
-                    logger.info(f"🧪 Selectively liquidating {len(assets_to_liquidate)} non-recommended positions")
-                    total_liquidated = 0
-
-                    for asset in assets_to_liquidate:
-                        available_balance = current_positions[asset]
-                        # Check if this position has total balance even if available is 0
-                        total_balance = 0
-                        for bal_asset, bal_entry in balances.items():
-                            if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']):
-                                try:
-                                    if isinstance(bal_entry, dict):
-                                        total_balance = float(bal_entry.get('balance', 0) or 0)
-                                    else:
-                                        total_balance = float(bal_entry or 0)
-                                    break
-                                except (TypeError, ValueError):
-                                    continue
-
-                        logger.info(f"🎯 Processing {asset}: available={available_balance:.8f}, total={total_balance:.8f}")
-                        liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
-                        if liquidated_amount > 0:
-                            total_liquidated += liquidated_amount
-                            logger.info(f"💰 Liquidated ${liquidated_amount:.2f} worth of {asset}")
-
-                    logger.info(f"✅ Selective liquidation completed: ${total_liquidated:.2f} in proceeds")
-            else:
-                # Multiple recommended assets or no recommendation - use traditional approach
-                logger.info(f"🧪 Executing complete liquidation of {len(current_positions)} positions (traditional approach)")
+            # Execute liquidation of non-recommended assets
+            if assets_to_liquidate:
+                logger.info(f"💰 Liquidating {len(assets_to_liquidate)} non-recommended assets: {assets_to_liquidate}")
                 total_liquidated = 0
 
-                for asset, available_balance in current_positions.items():
-                    # Check if this position has total balance even if available is 0
-                    total_balance = 0
-                    for bal_asset, bal_entry in balances.items():
-                        if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']):
-                            try:
-                                if isinstance(bal_entry, dict):
-                                    total_balance = float(bal_entry.get('balance', 0) or 0)
-                                else:
-                                    total_balance = float(bal_entry or 0)
-                                break
-                            except (TypeError, ValueError):
-                                continue
+                for asset in assets_to_liquidate:
+                    available_balance = current_positions.get(asset, 0)
+                    if available_balance > 0:
+                        logger.info(f"🎯 Liquidating {asset}: {available_balance:.8f} available")
+                        liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, available_balance)
+                        if liquidated_amount > 0:
+                            total_liquidated += liquidated_amount
 
-                    logger.info(f"🎯 Processing {asset}: available={available_balance:.8f}, total={total_balance:.8f}")
-
-                    liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
-                    if liquidated_amount > 0:
-                        total_liquidated += liquidated_amount
-                        logger.info(f"💰 Liquidated ${liquidated_amount:.2f} worth of {asset}")
-
-                logger.info(f"✅ Total liquidation completed: ${total_liquidated:.2f} in proceeds")
-
-            # Buy recommended assets using complete reallocation approach
-            recommended_assets = recommendation.get('recommended_assets', [])
-            if recommended_assets:
-                # Refresh balances after sells to get available USD
-                await asyncio.sleep(2)  # Wait for sell orders to settle
-                balances = self.kraken_service.get_available_balances()
-
-                # Get available USD balance
-                usd_balance = 0.0
-                try:
-                    usd_entry = balances.get('ZUSD', 0)
-                    if isinstance(usd_entry, dict):
-                        # BalanceEx format: {'balance': 'X', 'hold_trade': 'Y'}
-                        balance = float(usd_entry.get('balance', 0) or 0)
-                        hold_trade = float(usd_entry.get('hold_trade', 0) or 0)
-                        usd_balance = balance - hold_trade
-                    else:
-                        # Balance format: 'X'
-                        usd_balance = float(usd_entry or 0)
-                except (TypeError, ValueError):
-                    usd_balance = 0.0
-
-                if usd_balance <= 1:
-                    logger.warning(f"Insufficient USD balance (${usd_balance:.2f}) for purchases")
-                elif len(recommended_assets) == 1:
-                    # Single asset recommendation - use 100% complete reallocation
-                    asset = recommended_assets[0]
-                    logger.info(f"🎯 Complete 100% reallocation to single asset: {asset}")
-
-                    # Use 95% of available USD to account for stop-loss margin and precision requirements
-                    usd_balance_buffered = usd_balance * 0.95
-                    logger.info(f"📊 Using buffered USD balance: ${usd_balance_buffered:.2f} (95% of ${usd_balance:.2f})")
-                    usd_used = await self._execute_complete_reallocation(asset, usd_balance_buffered)
-                    if usd_used > 0:
-                        logger.info(f"✅ Complete 100% reallocation successful: ${usd_used:.2f} deployed to {asset}")
-                    else:
-                        logger.error(f"❌ Complete reallocation failed for {asset}")
-                else:
-                    # Multiple assets - use traditional allocation approach
-                    logger.info(f"Buying {len(recommended_assets)} recommended assets with available USD")
-
-                    if usd_balance <= 0:
-                        logger.warning("No USD balance available for buys - skipping recommended purchases")
-                    else:
-                        # Use 85% of USD balance to account for stop-loss margin requirements
-                        spendable_usd_total = usd_balance * 0.85
-                        logger.info(f"Available USD: {usd_balance:.2f}, Spendable (85%): {spendable_usd_total:.2f}")
-
-                        per_asset_usd = spendable_usd_total / max(len(recommended_assets), 1)
-
-                        for asset in recommended_assets:
-                            try:
-                                # Validate tradable pair
-                                common_asset = self._map_to_common_asset(asset)
-                                pair_id = self.kraken_service.get_pair_for_asset(common_asset)
-                                if not pair_id:
-                                    logger.warning(f"Skipping buy - no valid pair for {asset}")
-                                    continue
-
-                                # Get current price and order minimum
-                                current_price = await self._get_current_price(asset)
-                                if not current_price or current_price <= 0:
-                                    logger.warning(f"Skipping buy - could not get current price for {asset}")
-                                    continue
-
-                                ordermin = self.kraken_service.get_ordermin(pair_id)
-
-                                # Compute volume from per-asset USD allocation and round down
-                                raw_volume = per_asset_usd / current_price
-                                volume = self.kraken_service.round_down_volume(raw_volume, pair_id)
-
-                                if volume <= 0 or (ordermin and volume < ordermin):
-                                    logger.warning(f"Skipping buy for {asset} - volume {volume} below ordermin {ordermin}")
-                                    continue
-
-                                # Calculate stop-loss based on configuration
-                                stop_loss = current_price * (1 - self.config['stop_loss_percentage'] / 100)
-
-                                # Place smart order with stop-loss (limit first, market fallback)
-                                order_id = self.kraken_service.place_smart_order(pair_id, 'buy', volume, stop_loss)
-                                if order_id:
-                                    logger.info(f"Placed smart buy order for {asset}: {order_id} (stop-loss: {stop_loss:.4f}, {self.config['stop_loss_percentage']}% below)")
-                                else:
-                                    logger.error(f"Failed to place smart buy order for {asset}")
-
-                            except Exception as e:
-                                logger.error(f"Error processing buy for {asset}: {e}")
+                logger.info(f"✅ Liquidation completed: ${total_liquidated:.2f} in proceeds")
             else:
-                # Empty recommended_assets means sell everything to cash
-                logger.info("No recommended assets - will sell all positions to go to cash")
+                logger.info("✅ No non-recommended assets to liquidate")
+
+            # Step 2: Allocate ALL available cash to the recommended asset
+            await asyncio.sleep(2)  # Wait for liquidations to settle
+            balances = self.kraken_service.get_available_balances()
+
+            # Calculate total available cash
+            total_cash = 0
+            for asset, balance_entry in balances.items():
+                if asset not in fiat_assets:
+                    continue
+
+                try:
+                    if isinstance(balance_entry, dict):
+                        balance = float(balance_entry.get('balance', 0) or 0)
+                        hold_trade = float(balance_entry.get('hold_trade', 0) or 0)
+                        available_bal = balance - hold_trade
+                    else:
+                        available_bal = float(balance_entry)
+
+                    if available_bal > 0.05:  # Count any meaningful cash amounts
+                        total_cash += available_bal
+                        logger.info(f"💵 Available {asset}: ${available_bal:.2f}")
+                except (TypeError, ValueError):
+                    continue
+
+            if total_cash > 0.01:
+                logger.info(f"💰 Total available cash: ${total_cash:.2f}")
+                logger.info(f"🎯 Allocating 100% to {recommended_asset}")
+
+                usd_used = await self._execute_complete_reallocation(recommended_asset, total_cash)
+                if usd_used > 0:
+                    logger.info(f"✅ Complete allocation successful: ${usd_used:.2f} deployed to {recommended_asset}")
+                else:
+                    logger.error(f"❌ Complete allocation failed for {recommended_asset}")
+            else:
+                logger.info("✅ No significant cash available for allocation")
 
             logger.info("Step 5 completed - market orders executed")
 
         except Exception as e:
             logger.error(f"Error executing market orders: {e}")
+
+    def _assets_match(self, asset1: str, asset2: str) -> bool:
+        """Check if two assets are the same (handles different naming conventions)"""
+        # Normalize both assets for comparison
+        def normalize_asset(asset):
+            return asset.replace('X', '').replace('.F', '')
+
+        return normalize_asset(asset1) == normalize_asset(asset2)
     
     async def _execute_complete_liquidation(self, asset: str, available_balance: float, total_balance: float = 0):
         """Execute complete liquidation of an asset position using iterative smart orders"""
