@@ -645,7 +645,7 @@ Consider:
 - Whether current positions show signs of continued upside potential
 - Trust scores and historical performance of current positions
 
-STRONG PREFERENCE FOR HOLDING: Do not switch unless there's a clearly superior opportunity with high trust score and advantageous technicals.
+AGGRESSIVE SWITCHING POLICY: When opportunities exist, prefer SWITCHING to recommended assets unless current positions are clearly superior. Transaction costs are acceptable when switching to recommended assets with positive sentiment and technicals.
 
 RESPOND IN THIS EXACT JSON FORMAT:
 {{
@@ -798,35 +798,52 @@ TECHNICAL INDICATORS:
                 current_positions_summary.append(f"{asset}: {balance} units")
             
             # Find the best opportunity based on trust score and confidence
-            # Exclude opportunities for assets we already hold
+            # Include ALL opportunities - we want to switch TO the best opportunity,
+            # even if we already hold some of that asset
             best_opportunity = None
             best_score = 0
 
-            current_asset_names = set()
-            for asset_name in current_positions.keys():
-                # Handle asset name mapping (e.g., XETH -> ETH)
-                if asset_name.startswith('X') and len(asset_name) > 1:
-                    current_asset_names.add(asset_name[1:])  # XETH -> ETH
-                current_asset_names.add(asset_name)  # Also keep original name
 
             for item in portfolio_data:
                 asset = item['asset']
-                # Skip if we already hold this asset
-                if asset in current_asset_names:
-                    continue
-
                 trust_score = item.get('trust_score', 0.5)
                 confidence = item.get('confidence', 0.5)
                 combined_score = (trust_score + confidence) / 2
+
+                # Always consider opportunities - we want to switch TO the best one
                 if combined_score > best_score:
                     best_score = combined_score
                     best_opportunity = item
 
-            # If no opportunities remain (all are already held), recommend holding
+            # If we have opportunities and current positions, evaluate switching
+            if best_opportunity and current_positions:
+                best_asset = best_opportunity['asset']
+
+                # Check if we already hold ONLY the recommended asset
+                holding_only_recommended = True
+                for pos_asset in current_positions.keys():
+                    # Normalize for comparison
+                    normalized_pos = pos_asset.replace('X', '').replace('.F', '')
+                    normalized_rec = best_asset.replace('X', '').replace('.F', '')
+
+                    if normalized_pos != normalized_rec:
+                        holding_only_recommended = False
+                        break
+
+                if holding_only_recommended:
+                    return {
+                        'action': 'hold',
+                        'reasoning': f'Already optimally positioned with {best_asset}.',
+                        'recommended_assets': [best_asset],
+                        'expected_pnl_pct': 0.0,
+                        'risk_score': 3
+                    }
+
+            # If no opportunities found, recommend holding
             if not best_opportunity:
                 return {
                     'action': 'hold',
-                    'reasoning': 'All available opportunities are for assets already held in the portfolio.',
+                    'reasoning': 'No opportunities available for evaluation.',
                     'recommended_assets': list(current_positions.keys()) if current_positions else [],
                     'expected_pnl_pct': 0.0,
                     'risk_score': 3
@@ -856,8 +873,8 @@ Consider:
 - Source credibility and confidence scores
 - Trust scores and historical performance
 
-Holding preference:
-- Prefer to maintain the current position to minimize transaction costs and churn unless the identified opportunity offers a clearly superior risk-adjusted return (after costs) with strong trust and conviction.
+Switching preference:
+- Actively SWITCH to recommended opportunities unless current positions are clearly superior. Transaction costs are acceptable when switching to assets with positive sentiment and reasonable technical indicators.
 
 BEST OPPORTUNITY IDENTIFIED: {best_asset} (highest combined trust + confidence score)
 

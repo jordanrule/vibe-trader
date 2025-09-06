@@ -365,11 +365,80 @@ class TradingAgent:
                 if total_bal > 0:
                     current_positions[asset] = available_bal  # Use available for trading, but track total
 
+            # Get recommended assets to determine what to keep vs liquidate
+            recommended_assets = recommendation.get('recommended_assets', [])
+
             if not current_positions:
-                logger.info("No current positions to sell")
+                logger.info("No current positions to evaluate")
+            elif recommended_assets and len(recommended_assets) == 1:
+                # Single recommended asset - selective liquidation approach
+                recommended_asset = recommended_assets[0]
+                logger.info(f"🎯 Recommended asset: {recommended_asset}")
+
+                # Check if we already hold the recommended asset
+                already_holding_recommended = False
+                for held_asset in current_positions.keys():
+                    if (held_asset == recommended_asset or
+                        (recommended_asset == 'ETH' and held_asset in ['XETH', 'ETH.F']) or
+                        (recommended_asset == 'INJ' and held_asset in ['XINJ', 'INJ.F']) or
+                        (held_asset.replace('.F', '').replace('X', '') == recommended_asset.replace('.F', '').replace('X', ''))):
+                        already_holding_recommended = True
+                        logger.info(f"✅ Already holding recommended asset: {held_asset}")
+                        break
+
+                if already_holding_recommended:
+                    logger.info("🎯 Keeping current position in recommended asset, only liquidating others")
+                else:
+                    logger.info("🎯 Recommended asset not held, will liquidate all and reallocate 100%")
+
+                # Liquidate only assets that are NOT the recommended asset
+                assets_to_liquidate = []
+                for asset in current_positions.keys():
+                    should_liquidate = True
+
+                    # Check if this asset matches the recommended asset
+                    if (asset == recommended_asset or
+                        (recommended_asset == 'ETH' and asset in ['XETH', 'ETH.F']) or
+                        (recommended_asset == 'INJ' and asset in ['XINJ', 'INJ.F']) or
+                        (asset.replace('.F', '').replace('X', '') == recommended_asset.replace('.F', '').replace('X', ''))):
+                        should_liquidate = False
+                        logger.info(f"⏸️  Keeping position in recommended asset: {asset}")
+
+                    if should_liquidate:
+                        assets_to_liquidate.append(asset)
+
+                if not assets_to_liquidate:
+                    logger.info("✅ No assets to liquidate - already holding recommended asset")
+                else:
+                    # Execute selective liquidation
+                    logger.info(f"🧪 Selectively liquidating {len(assets_to_liquidate)} non-recommended positions")
+                    total_liquidated = 0
+
+                    for asset in assets_to_liquidate:
+                        available_balance = current_positions[asset]
+                        # Check if this position has total balance even if available is 0
+                        total_balance = 0
+                        for bal_asset, bal_entry in balances.items():
+                            if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']):
+                                try:
+                                    if isinstance(bal_entry, dict):
+                                        total_balance = float(bal_entry.get('balance', 0) or 0)
+                                    else:
+                                        total_balance = float(bal_entry or 0)
+                                    break
+                                except (TypeError, ValueError):
+                                    continue
+
+                        logger.info(f"🎯 Processing {asset}: available={available_balance:.8f}, total={total_balance:.8f}")
+                        liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
+                        if liquidated_amount > 0:
+                            total_liquidated += liquidated_amount
+                            logger.info(f"💰 Liquidated ${liquidated_amount:.2f} worth of {asset}")
+
+                    logger.info(f"✅ Selective liquidation completed: ${total_liquidated:.2f} in proceeds")
             else:
-                # Use complete liquidation approach for better execution
-                logger.info(f"🧪 Executing complete liquidation of {len(current_positions)} positions")
+                # Multiple recommended assets or no recommendation - use traditional approach
+                logger.info(f"🧪 Executing complete liquidation of {len(current_positions)} positions (traditional approach)")
                 total_liquidated = 0
 
                 for asset, available_balance in current_positions.items():
@@ -420,13 +489,14 @@ class TradingAgent:
                 if usd_balance <= 1:
                     logger.warning(f"Insufficient USD balance (${usd_balance:.2f}) for purchases")
                 elif len(recommended_assets) == 1:
-                    # Single asset recommendation - use complete reallocation
+                    # Single asset recommendation - use 100% complete reallocation
                     asset = recommended_assets[0]
-                    logger.info(f"🎯 Complete reallocation to single asset: {asset}")
+                    logger.info(f"🎯 Complete 100% reallocation to single asset: {asset}")
 
+                    # Use 100% of available USD for the recommended asset (no safety buffer)
                     usd_used = await self._execute_complete_reallocation(asset, usd_balance)
                     if usd_used > 0:
-                        logger.info(f"✅ Complete reallocation successful: ${usd_used:.2f} deployed to {asset}")
+                        logger.info(f"✅ Complete 100% reallocation successful: ${usd_used:.2f} deployed to {asset}")
                     else:
                         logger.error(f"❌ Complete reallocation failed for {asset}")
                 else:
@@ -508,59 +578,120 @@ class TradingAgent:
             for order_id, order_info in open_orders.items():
                 order_desc = order_info.get('descr', {})
                 order_pair = order_desc.get('pair', '')
+                order_type = order_desc.get('type', '')
+                close_info = order_desc.get('close', '')
 
-                # Check if this order is for our asset (be more permissive with matching)
+                # Check if this order is for our asset (be more comprehensive with matching)
                 asset_matches = False
-                if asset in order_pair:
+
+                # Direct asset name matching
+                if asset in order_pair or (common_asset and common_asset in order_pair):
                     asset_matches = True
-                elif common_asset and common_asset in order_pair:
-                    asset_matches = True
-                elif asset == 'XETH' and ('ETH' in order_pair or 'ETHUSD' in order_pair):
+
+                # Handle ETH variations
+                elif asset == 'XETH' and ('ETH' in order_pair or 'ETHUSD' in order_pair or 'XETH' in order_pair):
                     asset_matches = True
                 elif asset == 'ETH.F' and ('ETH' in order_pair or 'ETHUSD' in order_pair):
                     asset_matches = True
 
+                # Handle INJ variations (common issue from the logs)
+                elif asset == 'INJ.F' and ('INJ' in order_pair or 'INJUSD' in order_pair):
+                    asset_matches = True
+                elif asset == 'XINJ' and ('INJ' in order_pair or 'INJUSD' in order_pair):
+                    asset_matches = True
+
+                # Check for conditional close orders (stop-loss orders)
+                # These might have different pair names but still hold our asset
+                if not asset_matches and close_info:
+                    # If this is a stop-loss order, it might be holding our asset
+                    # Check if the close price suggests it's related to our asset
+                    try:
+                        if 'stop-loss' in str(close_info).lower():
+                            # This is likely a stop-loss order that could be holding our asset
+                            asset_matches = True
+                            logger.info(f"🎯 Found potential stop-loss order {order_id} that may be holding {asset}")
+                    except:
+                        pass
+
                 if asset_matches:
-                    logger.info(f"❌ Cancelling order {order_id} for {asset} (pair: {order_pair})")
+                    logger.info(f"❌ Cancelling order {order_id} for {asset} (pair: {order_pair}, type: {order_type})")
                     if self.kraken_service.cancel_order(order_id):
                         cancelled_orders.append(order_id)
                         logger.info(f"✅ Cancelled order {order_id}")
                     else:
                         logger.error(f"❌ Failed to cancel order {order_id}")
 
+            # Additional check: Look for any remaining orders that might be stop-loss related
+            if not cancelled_orders:
+                logger.info("No orders cancelled - checking for hidden stop-loss orders...")
+                # Try to get all orders including closed ones that might have conditional closes
+                # This is a fallback mechanism
+
             # Wait for cancellations to take effect
             if cancelled_orders:
                 logger.info(f"⏳ Waiting 5 seconds for {len(cancelled_orders)} order cancellations to process...")
                 await asyncio.sleep(5)
 
-                # Refresh balances after cancellation
-                balances = self.kraken_service.get_available_balances()
+            # Additional retry: Check again for any remaining orders that might have been missed
+            logger.info("🔄 Performing secondary order cancellation check...")
+            open_orders = self.kraken_service.get_open_orders()
+            additional_cancelled = []
 
-                # Update available balance after cancellations
-                for bal_asset, bal_entry in balances.items():
-                    # Match the asset we're trying to liquidate
-                    asset_match = False
-                    if bal_asset == asset:
-                        asset_match = True
-                    elif asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']:
-                        asset_match = True
-                    elif asset == 'ETH.F' and bal_asset in ['XETH', 'ETH.F', 'ETH']:
-                        asset_match = True
+            for order_id, order_info in open_orders.items():
+                order_desc = order_info.get('descr', {})
+                order_pair = order_desc.get('pair', '')
 
-                    if asset_match:
-                        if isinstance(bal_entry, dict):
-                            new_balance = float(bal_entry.get('balance', 0) or 0)
-                            new_hold = float(bal_entry.get('hold_trade', 0) or 0)
-                            new_available = new_balance - new_hold
-                            logger.info(f"📊 After cancellation - {bal_asset}: {new_balance:.8f} total, {new_hold:.8f} hold, {new_available:.8f} available")
-                            if new_available > remaining_balance:
-                                released = new_available - remaining_balance
-                                logger.info(f"✅ Released {released:.8f} {asset} from orders")
-                                remaining_balance = new_available
-                        else:
-                            new_available = float(bal_entry or 0)
-                            logger.info(f"📊 After cancellation - {bal_asset}: {new_available:.8f} available")
+                # More aggressive matching for any remaining orders
+                if (asset in order_pair or
+                    (common_asset and common_asset in order_pair) or
+                    (asset == 'INJ.F' and 'INJ' in order_pair) or
+                    (asset == 'XINJ' and 'INJ' in order_pair) or
+                    (asset == 'XETH' and ('ETH' in order_pair or 'XETH' in order_pair)) or
+                    (asset == 'ETH.F' and 'ETH' in order_pair)):
+
+                    logger.info(f"🔄 Cancelling additional order {order_id} for {asset} (pair: {order_pair})")
+                    if self.kraken_service.cancel_order(order_id):
+                        additional_cancelled.append(order_id)
+                        logger.info(f"✅ Cancelled additional order {order_id}")
+                    else:
+                        logger.error(f"❌ Failed to cancel additional order {order_id}")
+
+            if additional_cancelled:
+                logger.info(f"⏳ Waiting additional 3 seconds for {len(additional_cancelled)} more cancellations...")
+                await asyncio.sleep(3)
+
+            # Refresh balances after all cancellations
+            balances = self.kraken_service.get_available_balances()
+
+            # Update available balance after cancellations
+            for bal_asset, bal_entry in balances.items():
+                # Match the asset we're trying to liquidate
+                asset_match = False
+                if bal_asset == asset:
+                    asset_match = True
+                elif asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']:
+                    asset_match = True
+                elif asset == 'ETH.F' and bal_asset in ['XETH', 'ETH.F', 'ETH']:
+                    asset_match = True
+                elif asset == 'INJ.F' and bal_asset in ['XINJ', 'INJ']:
+                    asset_match = True
+                elif asset == 'XINJ' and bal_asset in ['XINJ', 'INJ']:
+                    asset_match = True
+
+                if asset_match:
+                    if isinstance(bal_entry, dict):
+                        new_balance = float(bal_entry.get('balance', 0) or 0)
+                        new_hold = float(bal_entry.get('hold_trade', 0) or 0)
+                        new_available = new_balance - new_hold
+                        logger.info(f"📊 After all cancellations - {bal_asset}: {new_balance:.8f} total, {new_hold:.8f} hold, {new_available:.8f} available")
+                        if new_available > remaining_balance:
+                            released = new_available - remaining_balance
+                            logger.info(f"✅ Released {released:.8f} {asset} from orders")
                             remaining_balance = new_available
+                    else:
+                        new_available = float(bal_entry or 0)
+                        logger.info(f"📊 After all cancellations - {bal_asset}: {new_available:.8f} available")
+                        remaining_balance = new_available
 
             # Now try to liquidate any available balance (after potential order cancellations)
             if remaining_balance > 0:
@@ -568,6 +699,44 @@ class TradingAgent:
 
                 # For complete liquidation, don't use stop-loss to ensure full execution
                 order_id = self.kraken_service.place_smart_order(pair_id, 'sell', remaining_balance, stop_loss=None)
+
+                # If the order still fails with insufficient funds, try one final cancellation of ALL orders
+                if not order_id:
+                    logger.warning("❌ Liquidation order failed - attempting emergency cancellation of ALL open orders")
+                    emergency_cancelled = []
+                    open_orders = self.kraken_service.get_open_orders()
+
+                    # Cancel ALL open orders as emergency measure
+                    for order_id, order_info in open_orders.items():
+                        logger.info(f"🚨 Emergency cancelling ALL order {order_id}")
+                        if self.kraken_service.cancel_order(order_id):
+                            emergency_cancelled.append(order_id)
+                        else:
+                            logger.error(f"❌ Failed emergency cancellation of {order_id}")
+
+                    if emergency_cancelled:
+                        logger.info(f"⏳ Waiting 5 seconds after emergency cancellation of {len(emergency_cancelled)} orders...")
+                        await asyncio.sleep(5)
+
+                        # Try liquidation one more time after emergency cancellation
+                        final_balances = self.kraken_service.get_available_balances()
+                        final_available = 0
+                        for bal_asset, bal_entry in final_balances.items():
+                            if bal_asset == asset or (asset == 'XETH' and bal_asset in ['ETH.F', 'XETH', 'ETH']) or (asset == 'INJ.F' and bal_asset in ['XINJ', 'INJ']):
+                                try:
+                                    if isinstance(bal_entry, dict):
+                                        balance = float(bal_entry.get('balance', 0) or 0)
+                                        hold_trade = float(bal_entry.get('hold_trade', 0) or 0)
+                                        final_available = balance - hold_trade
+                                    else:
+                                        final_available = float(bal_entry or 0)
+                                    break
+                                except (TypeError, ValueError):
+                                    continue
+
+                        if final_available > 0:
+                            logger.info(f"🚨 Final emergency liquidation attempt with {final_available} {asset}")
+                            order_id = self.kraken_service.place_market_order(pair_id, 'sell', final_available, stop_loss=None)
             elif total_balance > 0 and remaining_balance == 0:
                 # All balance is held by orders, but we already tried to cancel them above
                 # Check one more time if any balance was released
@@ -648,8 +817,8 @@ class TradingAgent:
                 logger.error(f"Could not get current price for {asset}")
                 return 0
 
-            # Use 95% of available USD for the purchase (leave small buffer)
-            spendable_usd = usd_balance * 0.95
+            # Use 100% of available USD for complete reallocation to single asset
+            spendable_usd = usd_balance
             volume = spendable_usd / current_price
 
             # Round down volume and check minimum order size
@@ -664,7 +833,7 @@ class TradingAgent:
             stop_loss = current_price * (1 - self.config['stop_loss_percentage'] / 100)
 
             logger.info(f"💰 {asset} price: ${current_price:.4f}")
-            logger.info(f"📊 Buying {volume:.6f} {asset} with ${spendable_usd:.2f}")
+            logger.info(f"📊 Buying {volume:.6f} {asset} with 100% of funds: ${spendable_usd:.2f}")
             logger.info(f"🛡️ Stop-loss: ${stop_loss:.4f} ({self.config['stop_loss_percentage']}% below entry)")
 
             # Place smart buy order with comprehensive stop-loss
