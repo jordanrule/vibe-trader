@@ -346,6 +346,7 @@ class TradingAgent:
             # Get current positions
             balances = self.kraken_service.get_available_balances()
             current_positions = {}
+            total_balances = {}
 
             # Define fiat/stable assets
             fiat_assets = {'ZUSD', 'USDT', 'USDC'}
@@ -362,9 +363,10 @@ class TradingAgent:
                 except (TypeError, ValueError):
                     continue
 
-                # Include all assets with balance > 0
+                # Include all assets with balance > 0 (both available and total)
                 if balance > 0:
-                    current_positions[asset] = available_bal
+                    current_positions[asset] = available_bal  # Available balance
+                    total_balances[asset] = balance          # Total balance (including held)
 
             logger.info(f"📊 Current positions: {list(current_positions.keys())}")
 
@@ -389,11 +391,18 @@ class TradingAgent:
 
                 for asset in assets_to_liquidate:
                     available_balance = current_positions.get(asset, 0)
-                    if available_balance > 0:
-                        logger.info(f"🎯 Liquidating {asset}: {available_balance:.8f} available")
-                        liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, available_balance)
+                    total_balance = total_balances.get(asset, 0)
+
+                    # Always attempt liquidation if there's any total balance (even if available is 0)
+                    if total_balance > 0:
+                        logger.info(f"🎯 Liquidating {asset}: {available_balance:.8f} available, {total_balance:.8f} total")
+                        liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
                         if liquidated_amount > 0:
                             total_liquidated += liquidated_amount
+                        else:
+                            logger.warning(f"⚠️ Liquidation of {asset} returned $0.00 - balance may be held by orders")
+                    else:
+                        logger.info(f"ℹ️ Skipping {asset} - no balance to liquidate")
 
                 logger.info(f"✅ Liquidation completed: ${total_liquidated:.2f} in proceeds")
             else:
@@ -498,6 +507,11 @@ class TradingAgent:
                 return 0
 
             logger.info(f"🎯 Starting complete liquidation of {asset} (available: {available_balance:.8f}, total: {total_balance:.8f})")
+
+            # If available balance is 0 but we have total balance, we may need to cancel orders first
+            needs_order_cancellation = (available_balance == 0 and total_balance > 0)
+            if needs_order_cancellation:
+                logger.info(f"🔄 Available balance is 0 but total balance is {total_balance:.8f} - will attempt order cancellation first")
 
             # Cancel ALL open orders for this asset first - this is critical
             open_orders = self.kraken_service.get_open_orders()
@@ -656,8 +670,20 @@ class TradingAgent:
                     logger.info(f"💰 After order cancellation, {final_available} {asset} became available - liquidating")
                     order_id = self.kraken_service.place_smart_order(pair_id, 'sell', final_available, stop_loss=None)
                 else:
-                    logger.info(f"ℹ️ {asset} still has no available balance after order cancellation (total: {total_balance})")
-                    return 0
+                    # If no available balance but we have total balance, try to liquidate total balance
+                    if total_balance > 0:
+                        logger.warning(f"⚠️ No available balance but total balance exists ({total_balance}) - attempting market liquidation")
+                        order_id = self.kraken_service.place_market_order(pair_id, 'sell', total_balance)
+                        if order_id:
+                            logger.info(f"✅ Market liquidation order placed for total balance: {order_id}")
+                            # Calculate approximate proceeds for return value (we'll get actual from polling)
+                            return total_balance * 0.001  # Rough estimate, actual value will be tracked elsewhere
+                        else:
+                            logger.error(f"❌ Failed to place market liquidation order for total balance")
+                            return 0
+                    else:
+                        logger.info(f"ℹ️ {asset} still has no available balance after order cancellation (total: {total_balance})")
+                        return 0
             else:
                 logger.info(f"ℹ️ No balance to liquidate for {asset}")
                 return 0
