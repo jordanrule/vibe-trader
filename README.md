@@ -1,9 +1,109 @@
 # Vibe Trader
 
-## Overview
-Vibe Trader is a cryptocurrency trading agent that watches Telegram for signals, checks them on Kraken, and makes portfolio decisions with help from OpenAI. It favors medium‑term moves, typically holding up to 6 hours, and uses careful order execution to get in and out efficiently.
+A sophisticated cryptocurrency trading system that uses AI-powered sentiment analysis and technical indicators to make automated trading decisions.
 
-### Notes on Vibe Coding
+## 🚀 Quick Start
+
+### Local Development
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Set environment variables
+source .env
+
+# Run locally
+python run_system.py
+```
+
+### Cloud Run Deployment
+
+#### 1. Test Locally
+```bash
+# Test Flask app directly (no Docker needed)
+./test_manual.sh
+
+# Test with Docker (requires Docker Desktop)
+./test_local.sh
+```
+
+#### 2. Deploy to Cloud Run
+```bash
+# Set your GCP project ID
+export PROJECT_ID=your-gcp-project-id
+
+# Build and deploy
+./build_cloud_run.sh
+```
+
+#### 3. Test Deployed Service
+```bash
+# Get service URL
+SERVICE_URL=$(gcloud run services describe vibe-trader --region=us-central1 --format="value(status.url)")
+
+# Test endpoints
+curl -X GET $SERVICE_URL/health
+curl -X GET $SERVICE_URL/status
+curl -X POST $SERVICE_URL/run-cycle
+```
+
+## 📋 API Endpoints
+
+- `GET /` - Health check
+- `GET /health` - Kubernetes-style health check
+- `GET /status` - System status
+- `POST /run-cycle` - Execute trading cycle
+
+## 🔧 Configuration
+
+### Environment Variables
+- `CLOUD_MODE=true` - Enable cloud mode
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token
+- `OPENAI_API_KEY` - OpenAI API key
+- `KRAKEN_API_KEY` - Kraken API key
+- `KRAKEN_API_SECRET` - Kraken API secret
+- `LIVE_MODE=false` - Enable live trading (use with caution)
+
+### Google Cloud Setup
+1. Create GCP project
+2. Enable required APIs (Cloud Run, Secret Manager, Storage)
+3. Create storage bucket
+4. Set up secrets in Secret Manager
+5. Deploy using the build script
+
+## 🐳 Docker
+
+### Build Image
+```bash
+docker build -t vibe-trader .
+```
+
+### Run Locally
+```bash
+docker run -p 8080:8080 -e CLOUD_MODE=true vibe-trader
+```
+
+## 📊 Architecture
+
+The system implements a 5-step trading cycle:
+1. Check new opportunities
+2. Analyze market data
+3. Generate AI recommendations
+4. Execute trades
+5. Monitor performance
+
+## 🛡️ Security
+
+- All secrets stored in Google Secret Manager
+- State files persisted in Google Cloud Storage
+- Live trading disabled by default
+- Comprehensive error handling
+
+## 📝 Logging
+
+- Local: Console and file logging
+- Cloud: Integrated with Google Cloud Logging
+- Telegram notifications for important events
 
 This project was built with an exploratory “vibe coding” approach. That means we prioritized learning quickly and stitching together real APIs into something useful. Along the way, we proved that Telegram sentiment, OpenAI analysis, Kraken trading, and simple learning signals can work together as a practical trading loop.
 
@@ -55,29 +155,6 @@ python run_system.py
 ```
 
 **Note**: Keep the virtual environment activated for all subsequent runs. The system will run in paper trading mode by default (`LIVE_MODE=false`). Set `LIVE_MODE=true` only when you're ready for live trading.
-
-### Detailed Installation and Execution
-
-For more control over configuration and environment setup:
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variables (add to your shell profile or .env file)
-export TELEGRAM_BOT_TOKEN="your_bot_token"
-export TELEGRAM_CHAT_ID="your_chat_id"
-export OPENAI_API_KEY="your_openai_key"
-export KRAKEN_API_KEY="your_kraken_key"
-export KRAKEN_SECRET="your_kraken_secret"
-
-# Optional: Configure trading parameters
-export MAX_TRADE_LIFETIME_HOURS=6
-export LIVE_MODE=false
-
-# Run the trading system
-python run_system.py
-```
 
 **Python Version Requirements:**
 - **Recommended**: Python 3.8 or higher
