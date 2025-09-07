@@ -569,6 +569,11 @@ class OpportunityService(BaseService):
                             logger.warning(f"Skipping asset {asset} - no valid trading pair found")
                             continue
 
+                        # Check if asset is tradeable in current jurisdiction
+                        if not kraken_service.is_asset_tradeable(asset):
+                            logger.warning(f"Skipping asset {asset} - trading restricted in current jurisdiction")
+                            continue
+
                         # Get current price
                         ticker = kraken_service.get_ticker(pair_id)
                         if not ticker or 'c' not in ticker:
@@ -641,7 +646,7 @@ IMPORTANT HOLDING PREFERENCE:
 Consider:
 - Current market conditions and technical indicators
 - Risk of holding without new opportunities (generally LOW - this is normal)
-- Transaction costs (0.26% per trade to sell - avoid unnecessary trading)
+- Transaction costs (0.5% per trade to sell - avoid unnecessary trading)
 - Market volatility and momentum
 - Whether current positions show signs of continued upside potential
 - Trust scores and historical performance of current positions
@@ -724,13 +729,20 @@ If action is "hold", keep current positions.
             # Build portfolio data for RAG query
             portfolio_data = []
             for asset in distinct_assets:
+                # Check if asset is tradeable in current jurisdiction
+                if not kraken_service.is_asset_tradeable(asset):
+                    logger.warning(f"Skipping opportunity for {asset} - trading restricted in current jurisdiction")
+                    continue
+
                 # Get current price and technical indicators
                 pair_id = kraken_service.get_pair_for_asset(asset)
                 if not pair_id:
+                    logger.warning(f"Skipping opportunity for {asset} - no valid trading pair found")
                     continue
-                
+
                 candles = kraken_service.get_candles(pair_id, interval=15, count=720)
                 if not candles or len(candles) < 20:
+                    logger.warning(f"Skipping opportunity for {asset} - insufficient candle data")
                     continue
                 
                 technical_indicators = self.calculate_technical_indicators(candles)
@@ -897,7 +909,7 @@ Given the current portfolio positions and available opportunities, recommend whe
 
 Consider:
 - Current position performance vs opportunity potential
-- Transaction costs (0.26% per trade)
+- Transaction costs (0.5% per trade)
 - Risk management and stop-loss levels
 - Technical indicators alignment
 - Source credibility and confidence scores

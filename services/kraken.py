@@ -397,7 +397,7 @@ class KrakenService(BaseService):
             logger.error(f"Error placing market order: {e}")
             return None
 
-    def place_limit_order(self, pair: str, order_type: str, volume: float, price: float, stop_loss: Optional[float] = None) -> Optional[str]:
+    def place_limit_order(self, pair: str, order_type: str, volume: float, price: float, stop_loss: Optional[float] = None, post_only: bool = True) -> Optional[str]:
         """
         Place a limit order on Kraken with optional stop-loss
 
@@ -407,6 +407,7 @@ class KrakenService(BaseService):
             volume: Amount to trade (in base currency)
             price: Limit price
             stop_loss: Optional stop loss price
+            post_only: Whether to make order post-only (default: True)
 
         Returns:
             Order ID if successful, None otherwise
@@ -430,6 +431,10 @@ class KrakenService(BaseService):
                 'volume': str(rounded_volume),
                 'price': str(rounded_price)
             }
+
+            # Add post-only flag to avoid taker fees
+            if post_only:
+                data['oflags'] = 'post'
 
             # Add conditional close (stop-loss) if provided
             if stop_loss:
@@ -548,6 +553,40 @@ class KrakenService(BaseService):
         except Exception as e:
             logger.error(f"Error fetching tradeable pairs: {e}")
             return {}
+
+    def is_asset_tradeable(self, asset: str) -> bool:
+        """
+        Check if an asset is tradeable for the current account/jurisdiction
+
+        Args:
+            asset: Asset symbol (e.g., 'PORTAL', 'ETH')
+
+        Returns:
+            True if tradeable, False if restricted
+        """
+        try:
+            # Get asset info to check for restrictions
+            response = requests.get("https://api.kraken.com/0/public/Assets", timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            assets = data.get('result', {})
+            asset_key = f'X{asset}' if not asset.startswith('X') else asset
+
+            if asset_key in assets:
+                asset_info = assets[asset_key]
+                # Check if asset has any restrictions
+                if 'restrictions' in asset_info and asset_info['restrictions']:
+                    logger.warning(f"Asset {asset} has trading restrictions: {asset_info['restrictions']}")
+                    return False
+
+            # If we can't find asset info or no restrictions, assume tradeable
+            return True
+
+        except Exception as e:
+            logger.warning(f"Could not check trading restrictions for {asset}: {e}")
+            # If we can't check, assume tradeable to not block trading unnecessarily
+            return True
     
     def get_candles(self, pair: str, interval: int = 15, count: int = 720) -> List[Dict]:
         """Get OHLC candle data for a trading pair"""
@@ -696,8 +735,8 @@ class KrakenService(BaseService):
             else:  # sell
                 limit_price = current_price * (1 - price_offset_pct)
 
-            # Place initial limit order
-            current_order_id = self.place_limit_order(pair, order_type, volume, limit_price, stop_loss)
+            # Place initial limit order (post-only to avoid taker fees)
+            current_order_id = self.place_limit_order(pair, order_type, volume, limit_price, stop_loss, post_only=True)
             if not current_order_id:
                 logger.warning("Initial limit order failed, falling back to market order")
                 return self.place_market_order(pair, order_type, volume, stop_loss)
@@ -737,8 +776,8 @@ class KrakenService(BaseService):
                             else:
                                 logger.warning(f"Failed to cancel order {current_order_id}")
 
-                            # Place new order at updated price
-                            current_order_id = self.place_limit_order(pair, order_type, volume, new_limit_price, stop_loss)
+                            # Place new order at updated price (post-only)
+                            current_order_id = self.place_limit_order(pair, order_type, volume, new_limit_price, stop_loss, post_only=True)
                             if current_order_id:
                                 limit_price = new_limit_price
                                 last_refresh_time = time.time()
