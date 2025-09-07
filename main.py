@@ -18,14 +18,15 @@ from services.telegram import TelegramService
 from services.kraken import KrakenService
 from services.openai import OpenAIService
 from services.opportunity import OpportunityService
+from services.cloud_storage import CloudStorageService
+from services.secrets import SecretsService
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('agent_trading.log'),
-        logging.StreamHandler()
+        logging.StreamHandler()  # Only console logging initially
     ]
 )
 logger = logging.getLogger(__name__)
@@ -34,34 +35,115 @@ class TradingAgent:
     """Trading agent implementing the 5-step cycle"""
     
     def __init__(self):
-        # Load configuration from environment
-        self.config = {
-            'telegram_token': os.getenv('TELEGRAM_BOT_TOKEN'),
-            'telegram_chat_id': os.getenv('TELEGRAM_CHAT_ID'),
-            'openai_api_key': os.getenv('OPENAI_API_KEY'),
-            'kraken_api_key': os.getenv('KRAKEN_API_KEY'),
-            'kraken_secret': os.getenv('KRAKEN_SECRET'),
-            'live_mode': os.getenv('LIVE_MODE', 'false').lower() == 'true',
-            'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '6')),
-            'stop_loss_percentage': float(os.getenv('STOP_LOSS_PERCENTAGE', '20'))
-        }
-        
+        # Initialize secrets service first
+        self.is_cloud_mode = os.getenv('CLOUD_MODE', 'false').lower() == 'true'
+
+        if self.is_cloud_mode:
+            logger.info("🌐 Running in CLOUD MODE")
+            self.secrets_service = SecretsService()
+            self.config = self.secrets_service.get_all_config()
+
+            # Initialize cloud storage
+            gcp_config = self.secrets_service.get_gcp_config()
+            self.cloud_storage = CloudStorageService(gcp_config['bucket_name'])
+
+            # Set up cloud logging
+            self._setup_cloud_logging()
+        else:
+            logger.info("💻 Running in LOCAL MODE")
+            # Local mode - load from environment variables
+            self.secrets_service = SecretsService()  # Will use environment variables
+            self.config = {
+                'telegram_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+                'telegram_chat_id': os.getenv('TELEGRAM_CHAT_ID'),
+                'openai_api_key': os.getenv('OPENAI_API_KEY'),
+                'kraken_api_key': os.getenv('KRAKEN_API_KEY') or os.getenv('NEW_KRAKEN_API_KEY'),
+                'kraken_api_secret': os.getenv('KRAKEN_API_SECRET') or os.getenv('KRAKEN_SECRET') or os.getenv('NEW_KRAKEN_SECRET'),
+                'live_mode': os.getenv('LIVE_MODE', 'false').lower() == 'true',
+                'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '6')),
+                'stop_loss_percentage': float(os.getenv('STOP_LOSS_PERCENTAGE', '20'))
+            }
+
+            # Initialize local storage
+            self.cloud_storage = CloudStorageService()
+
+            # Set up local logging
+            self._setup_local_logging()
+
         # Validate required configuration
-        if not self.config['telegram_token']:
-            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+        required_keys = ['telegram_token', 'openai_api_key', 'kraken_api_key', 'kraken_api_secret']
+        missing_vars = []
+
+        for key in required_keys:
+            if not self.config.get(key):
+                # Provide helpful error messages for missing environment variables
+                if key == 'telegram_token':
+                    missing_vars.append("TELEGRAM_BOT_TOKEN")
+                elif key == 'openai_api_key':
+                    missing_vars.append("OPENAI_API_KEY")
+                elif key == 'kraken_api_key':
+                    missing_vars.append("KRAKEN_API_KEY or NEW_KRAKEN_API_KEY")
+                elif key == 'kraken_api_secret':
+                    missing_vars.append("KRAKEN_API_SECRET or KRAKEN_SECRET or NEW_KRAKEN_SECRET")
+
+        if missing_vars:
+            error_msg = "Missing required environment variables:\n"
+            for var in missing_vars:
+                error_msg += f"  - {var}\n"
+            error_msg += "\nPlease set these environment variables before running the system."
+            raise ValueError(error_msg)
 
         # Log configuration
         logger.info(f"TradingAgent initialized (max trade lifetime: {self.config['max_trade_lifetime_hours']}h)")
         logger.info(f"Stop-loss configured: {self.config['stop_loss_percentage']}% below entry price")
         logger.info(f"Live trading mode: {self.config['live_mode']}")
-        
-        # Initialize services
+
+        # Initialize services with config
         self.telegram_service = TelegramService(self.config)
         self.kraken_service = KrakenService(self.config)
         self.openai_service = OpenAIService(self.config)
-        self.opportunity_service = OpportunityService(self.config)
-        
-        logger.info(f"TradingAgent initialized (max trade lifetime: {self.config['max_trade_lifetime_hours']}h)")
+
+        # Pass cloud storage to opportunity service
+        opportunity_config = self.config.copy()
+        opportunity_config['cloud_storage'] = self.cloud_storage
+        self.opportunity_service = OpportunityService(opportunity_config)
+
+    def _setup_cloud_logging(self):
+        """Set up logging for cloud environment"""
+        # Create a handler that writes to cloud storage
+        class CloudStorageHandler(logging.Handler):
+            def __init__(self, cloud_storage):
+                super().__init__()
+                self.cloud_storage = cloud_storage
+                self.buffer = []
+                self.flush_interval = 10  # Flush every 10 log entries
+                self.log_filename = f"logs/agent_trading_{datetime.now().strftime('%Y%m%d')}.log"
+
+            def emit(self, record):
+                log_entry = self.format(record)
+                self.buffer.append(log_entry)
+
+                # Flush to cloud storage periodically
+                if len(self.buffer) >= self.flush_interval:
+                    self._flush_to_cloud()
+
+            def _flush_to_cloud(self):
+                if self.buffer:
+                    content = '\n'.join(self.buffer) + '\n'
+                    self.cloud_storage.append_text(self.log_filename, content)
+                    self.buffer = []
+
+        # Add cloud storage handler
+        cloud_handler = CloudStorageHandler(self.cloud_storage)
+        cloud_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(cloud_handler)
+
+    def _setup_local_logging(self):
+        """Set up logging for local environment"""
+        # Add file handler for local logging
+        file_handler = logging.FileHandler('agent_trading.log')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler)
     
     async def run_cycle(self, from_time: datetime, to_time: datetime, is_backtest: bool = False):
         """

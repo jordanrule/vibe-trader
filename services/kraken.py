@@ -21,7 +21,7 @@ class KrakenService(BaseService):
     def __init__(self, config: Dict[str, str]):
         super().__init__(config)
         self.api_key = config.get('kraken_api_key')
-        self.secret = config.get('kraken_secret')
+        self.secret = config.get('kraken_api_secret') or config.get('kraken_secret')
         self.live_mode = config.get('live_mode', False)
         
         # Load pair cache

@@ -26,7 +26,7 @@ If you plan to run this in a team setting, a fresh implementation is recommended
 | Variable | Description | Default | Notes |
 |----------|-------------|---------|-------|
 | `MAX_TRADE_LIFETIME_HOURS` | Hours before opportunities expire | `6` | Controls position holding duration |
-| `STOP_LOSS_PERCENTAGE` | Stop-loss protection percentage below entry price | `20` | **Note**: Currently implemented as hardcoded values (10% or 20%) in code, environment variable not yet integrated |
+| `STOP_LOSS_PERCENTAGE` | Stop-loss protection percentage below entry price | `20` | Controls stop loss |
 | `LIVE_MODE` | Enable live trading (vs paper trading) | `false` | Set to `true` for actual trade execution |
 
 ### API Setup

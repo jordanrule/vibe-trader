@@ -17,50 +17,70 @@ class OpportunityService(BaseService):
     def __init__(self, config: Dict[str, any]):
         super().__init__(config)
         self.max_trade_lifetime_hours = config.get('max_trade_lifetime_hours', 6)
+        self.cloud_storage = config.get('cloud_storage')  # Will be passed from TradingAgent
         self.opportunities = self.load_opportunities()
         self.bandit_source_stats = self.load_bandit_model()
     
     def load_opportunities(self) -> Dict:
         """Load trading opportunities from storage"""
-        try:
-            with open('state_opportunities.json', 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
-        except Exception as e:
-            logger.error(f"Error loading opportunities: {e}")
-            return {}
-    
+        if self.cloud_storage:
+            return self.cloud_storage.read_json('state_opportunities.json')
+        else:
+            # Fallback for backward compatibility
+            try:
+                with open('state_opportunities.json', 'r') as f:
+                    return json.load(f)
+            except FileNotFoundError:
+                return {}
+            except Exception as e:
+                logger.error(f"Error loading opportunities: {e}")
+                return {}
+
     def save_opportunities(self):
         """Save trading opportunities to storage"""
-        try:
-            with open('state_opportunities.json', 'w') as f:
-                json.dump(self.opportunities, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving opportunities: {e}")
+        if self.cloud_storage:
+            self.cloud_storage.write_json('state_opportunities.json', self.opportunities)
+        else:
+            # Fallback for backward compatibility
+            try:
+                with open('state_opportunities.json', 'w') as f:
+                    json.dump(self.opportunities, f, indent=2)
+            except Exception as e:
+                logger.error(f"Error saving opportunities: {e}")
     
     def load_bandit_model(self) -> Dict:
         """Load bandit model source statistics"""
-        try:
-            with open('state_bandit_model.json', 'r') as f:
-                data = json.load(f)
-                source_stats = data.get('source_stats', {})
-                logger.info(f"Loaded bandit model with {len(source_stats)} sources")
-                return source_stats
-        except FileNotFoundError:
-            logger.info("No bandit model found, starting fresh")
-            return {}
-        except Exception as e:
-            logger.error(f"Error loading bandit model: {e}")
-            return {}
-    
+        if self.cloud_storage:
+            data = self.cloud_storage.read_json('state_bandit_model.json')
+            source_stats = data.get('source_stats', {}) if data else {}
+            logger.info(f"Loaded bandit model with {len(source_stats)} sources")
+            return source_stats
+        else:
+            # Fallback for backward compatibility
+            try:
+                with open('state_bandit_model.json', 'r') as f:
+                    data = json.load(f)
+                    source_stats = data.get('source_stats', {})
+                    logger.info(f"Loaded bandit model with {len(source_stats)} sources")
+                    return source_stats
+            except FileNotFoundError:
+                logger.info("No bandit model found, starting fresh")
+                return {}
+            except Exception as e:
+                logger.error(f"Error loading bandit model: {e}")
+                return {}
+
     def save_bandit_model(self):
         """Save bandit model to disk"""
-        try:
-            with open('state_bandit_model.json', 'w') as f:
-                json.dump({'source_stats': self.bandit_source_stats}, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving bandit model: {e}")
+        if self.cloud_storage:
+            self.cloud_storage.write_json('state_bandit_model.json', {'source_stats': self.bandit_source_stats})
+        else:
+            # Fallback for backward compatibility
+            try:
+                with open('state_bandit_model.json', 'w') as f:
+                    json.dump({'source_stats': self.bandit_source_stats}, f, indent=2)
+            except Exception as e:
+                logger.error(f"Error saving bandit model: {e}")
     
     def has_opportunity(self, asset: str) -> bool:
         """Check if we have an opportunity for the given asset"""
@@ -311,25 +331,40 @@ class OpportunityService(BaseService):
         """Update bandit model based on newly recorded PnL outcomes"""
         try:
             # Read the state_performance.json file
-            if not os.path.exists('state_performance.json'):
-                logger.info("No performance data file found, skipping bandit model update")
-                return
+            if self.cloud_storage:
+                if not self.cloud_storage.file_exists('state_performance.json'):
+                    logger.info("No performance data file found, skipping bandit model update")
+                    return
 
-            with open('state_performance.json', 'r') as f:
-                lines = f.readlines()
+                performance_content = self.cloud_storage.read_text('state_performance.json')
+                lines = performance_content.strip().split('\n') if performance_content else []
+            else:
+                # Local fallback
+                if not os.path.exists('state_performance.json'):
+                    logger.info("No performance data file found, skipping bandit model update")
+                    return
+
+                with open('state_performance.json', 'r') as f:
+                    lines = f.readlines()
 
             # Track which outcomes we've already processed
             processed_outcomes = set()
-            if os.path.exists('state_bandit_model.json'):
-                try:
-                    with open('state_bandit_model.json', 'r') as f:
-                        existing_data = json.load(f)
-                        # Track processed outcomes by position_id + timestamp
-                        processed_outcomes = set()
-                        for source_data in existing_data.get('processed_outcomes', []):
-                            processed_outcomes.add(source_data)
-                except:
-                    pass
+            if self.cloud_storage:
+                existing_data = self.cloud_storage.read_json('state_bandit_model.json')
+                if existing_data:
+                    processed_outcomes = set(existing_data.get('processed_outcomes', []))
+            else:
+                # Local fallback
+                if os.path.exists('state_bandit_model.json'):
+                    try:
+                        with open('state_bandit_model.json', 'r') as f:
+                            existing_data = json.load(f)
+                            # Track processed outcomes by position_id + timestamp
+                            processed_outcomes = set()
+                            for source_data in existing_data.get('processed_outcomes', []):
+                                processed_outcomes.add(source_data)
+                    except:
+                        pass
 
             # Process only new outcomes
             new_outcomes = []
@@ -406,8 +441,12 @@ class OpportunityService(BaseService):
                 'last_updated': datetime.now().isoformat()
             }
 
-            with open('state_bandit_model.json', 'w') as f:
-                json.dump(bandit_data, f, indent=2)
+            if self.cloud_storage:
+                self.cloud_storage.write_json('state_bandit_model.json', bandit_data)
+            else:
+                # Local fallback
+                with open('state_bandit_model.json', 'w') as f:
+                    json.dump(bandit_data, f, indent=2)
 
             logger.info(f"Updated bandit model with {len(new_outcomes)} new outcomes (total processed: {len(all_outcomes)})")
 
