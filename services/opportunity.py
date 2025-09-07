@@ -602,6 +602,23 @@ class OpportunityService(BaseService):
                         })
 
                     if portfolio_data:
+                        # Collect all unique sources from portfolio data
+                        sources_in_portfolio = set()
+                        for item in portfolio_data:
+                            sources_in_portfolio.add(item.get('source', 'Existing Position'))
+
+                        # Get raw bandit model statistics for relevant sources
+                        bandit_stats_for_prompt = {}
+                        for source in sources_in_portfolio:
+                            if source in self.bandit_source_stats:
+                                bandit_stats_for_prompt[source] = {
+                                    'total_trades': self.bandit_source_stats[source]['total_trades'],
+                                    'successful_trades': self.bandit_source_stats[source]['successful_trades'],
+                                    'total_profit': self.bandit_source_stats[source]['total_profit'],
+                                    'avg_profit': self.bandit_source_stats[source]['avg_profit'],
+                                    'success_rate': self.bandit_source_stats[source]['success_rate']
+                                }
+
                         # Create OpenAI prompt for position evaluation
                         current_positions_summary = []
                         for pos in portfolio_data:
@@ -614,7 +631,7 @@ class OpportunityService(BaseService):
                             detail = f"""
 ASSET: {item['asset']}
 CURRENT PRICE: ${item['current_price']:.4f}
-TRUST SCORE: {trust_score:.2f} (historical performance from inception to {self.max_trade_lifetime_hours}h based on buy-and-hold returns)
+CALCULATED TRUST SCORE: {trust_score:.2f} (derived from success rate and profitability below)
 TECHNICAL INDICATORS:
 - RSI: {tech.get('rsi', 0):.1f}
 - MACD: {tech.get('macd', 0):.6f}
@@ -624,6 +641,24 @@ TECHNICAL INDICATORS:
 """
                             portfolio_details.append(detail)
 
+                        # Format bandit statistics for the prompt
+                        bandit_stats_text = ""
+                        if bandit_stats_for_prompt:
+                            bandit_stats_text = f"""
+SOURCE PERFORMANCE STATISTICS (tracked over {self.max_trade_lifetime_hours}h trading lifetime):
+"""
+                            for source, stats in bandit_stats_for_prompt.items():
+                                bandit_stats_text += f"""
+{source}:
+- Total Trades: {stats['total_trades']}
+- Successful Trades: {stats['successful_trades']}
+- Success Rate: {stats['success_rate']:.1%}
+- Total Profit: ${stats['total_profit']:.4f}
+- Average Profit per Trade: ${stats['avg_profit']:.4f}
+"""
+                        else:
+                            bandit_stats_text = "\nSOURCE PERFORMANCE STATISTICS: No historical data available for current sources."
+
                         prompt = f"""
 You are an expert cryptocurrency portfolio manager. You have {len(current_positions)} existing positions but no new opportunities to consider.
 
@@ -632,6 +667,8 @@ CURRENT POSITIONS:
 
 DETAILED ANALYSIS:
 {chr(10).join(portfolio_details)}
+
+{bandit_stats_text}
 
 TASK:
 Evaluate whether to hold these existing positions or convert them to cash (sell everything to USD).
@@ -649,7 +686,8 @@ Consider:
 - Transaction costs (0.5% per trade to sell - avoid unnecessary trading)
 - Market volatility and momentum
 - Whether current positions show signs of continued upside potential
-- Trust scores and historical performance of current positions
+- Raw historical performance statistics above (more reliable than calculated trust scores)
+- Success rates, total trades, and profitability patterns for each source
 
 AGGRESSIVE SWITCHING POLICY: When opportunities exist, prefer SWITCHING to recommended assets unless current positions are clearly superior. Transaction costs are acceptable when switching to recommended assets with positive sentiment and technicals.
 
@@ -780,6 +818,23 @@ If action is "hold", keep current positions.
                 logger.warning("No portfolio data available for RAG query")
                 return None
             
+            # Collect all unique sources from portfolio data
+            sources_in_portfolio = set()
+            for item in portfolio_data:
+                sources_in_portfolio.add(item['source'])
+
+            # Get raw bandit model statistics for relevant sources
+            bandit_stats_for_prompt = {}
+            for source in sources_in_portfolio:
+                if source in self.bandit_source_stats:
+                    bandit_stats_for_prompt[source] = {
+                        'total_trades': self.bandit_source_stats[source]['total_trades'],
+                        'successful_trades': self.bandit_source_stats[source]['successful_trades'],
+                        'total_profit': self.bandit_source_stats[source]['total_profit'],
+                        'avg_profit': self.bandit_source_stats[source]['avg_profit'],
+                        'success_rate': self.bandit_source_stats[source]['success_rate']
+                    }
+
             # Create RAG prompt
             portfolio_summary = []
             for item in portfolio_data:
@@ -792,7 +847,7 @@ ORIGINAL ENTRY: ${item['entry_price']:.4f}
 TARGET EXIT: ${item['exit_price']:.4f}
 STOP LOSS: ${item['stop_loss']:.4f}
 SOURCE: {item['source']}
-TRUST SCORE: {trust_score:.2f} (historical performance from inception to {self.max_trade_lifetime_hours}h based on buy-and-hold returns)
+CALCULATED TRUST SCORE: {trust_score:.2f} (derived from success rate and profitability below)
 SENTIMENT: {item['sentiment']}
 CONFIDENCE: {item['confidence']:.2f}
 TECHNICAL INDICATORS:
@@ -893,6 +948,24 @@ TECHNICAL INDICATORS:
 
             best_asset = best_opportunity['asset']
 
+            # Format bandit statistics for the prompt
+            bandit_stats_text = ""
+            if bandit_stats_for_prompt:
+                bandit_stats_text = f"""
+SOURCE PERFORMANCE STATISTICS (tracked over {self.max_trade_lifetime_hours}h trading lifetime):
+"""
+                for source, stats in bandit_stats_for_prompt.items():
+                    bandit_stats_text += f"""
+{source}:
+- Total Trades: {stats['total_trades']}
+- Successful Trades: {stats['successful_trades']}
+- Success Rate: {stats['success_rate']:.1%}
+- Total Profit: ${stats['total_profit']:.4f}
+- Average Profit per Trade: ${stats['avg_profit']:.4f}
+"""
+            else:
+                bandit_stats_text = "\nSOURCE PERFORMANCE STATISTICS: No historical data available for current sources."
+
             prompt = f"""
 You are an expert cryptocurrency portfolio manager. Analyze this portfolio of opportunities and current positions to recommend the optimal trading action.
 
@@ -901,6 +974,8 @@ CURRENT PORTFOLIO POSITIONS:
 
 AVAILABLE OPPORTUNITIES:
 {chr(10).join(portfolio_summary)}
+
+{bandit_stats_text}
 
 TASK:
 Given the current portfolio positions and available opportunities, recommend whether to:
@@ -913,7 +988,8 @@ Consider:
 - Risk management and stop-loss levels
 - Technical indicators alignment
 - Source credibility and confidence scores
-- Trust scores and historical performance
+- Raw historical performance statistics above (more reliable than calculated trust scores)
+- Success rates, total trades, and profitability patterns
 
 Switching preference:
 - Actively SWITCH to recommended opportunities unless current positions are clearly superior. Transaction costs are acceptable when switching to assets with positive sentiment and reasonable technical indicators.

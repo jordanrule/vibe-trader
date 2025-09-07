@@ -346,7 +346,10 @@ class KrakenService(BaseService):
             rounded_volume = self.round_down_volume(volume, pair)
             ordermin = self.get_ordermin(pair)
             if rounded_volume <= 0 or (ordermin and rounded_volume < ordermin):
-                logger.warning(f"Skipping {order_type} market order for {pair} - volume {rounded_volume} below ordermin {ordermin}")
+                if rounded_volume <= 0:
+                    logger.info(f"ℹ️ Insufficient funds for {order_type} market order on {pair}")
+                else:
+                    logger.info(f"ℹ️ Volume {rounded_volume} below minimum {ordermin} for {order_type} market order on {pair}")
                 return None
 
             data = {
@@ -418,7 +421,10 @@ class KrakenService(BaseService):
             rounded_volume = self.round_down_volume(volume, pair)
             ordermin = self.get_ordermin(pair)
             if rounded_volume <= 0 or (ordermin and rounded_volume < ordermin):
-                logger.warning(f"Skipping {order_type} limit order for {pair} - volume {rounded_volume} below ordermin {ordermin}")
+                if rounded_volume <= 0:
+                    logger.info(f"ℹ️ Insufficient funds for {order_type} limit order on {pair}")
+                else:
+                    logger.info(f"ℹ️ Volume {rounded_volume} below minimum {ordermin} for {order_type} limit order on {pair}")
                 return None
 
             # Round price to appropriate precision

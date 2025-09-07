@@ -749,7 +749,11 @@ class TradingAgent:
             ordermin = self.kraken_service.get_ordermin(pair_id)
 
             if volume <= 0 or (ordermin and volume < ordermin):
-                logger.error(f"Volume {volume} too small for {asset} (minimum: {ordermin})")
+                if volume <= 0:
+                    logger.info(f"ℹ️ Insufficient funds (${spendable_usd:.2f}) to purchase any {asset} at current price (${current_price:.4f})")
+                else:
+                    logger.info(f"ℹ️ Volume {volume:.6f} too small for {asset} (minimum: {ordermin}) - insufficient funds for meaningful reallocation")
+                logger.info(f"✅ Skipping reallocation to {asset} - position already optimal or insufficient funds")
                 return 0
 
             # Calculate stop-loss based on configuration
