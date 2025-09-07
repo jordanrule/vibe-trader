@@ -47,8 +47,8 @@ class TradingAgent:
             gcp_config = self.secrets_service.get_gcp_config()
             self.cloud_storage = CloudStorageService(gcp_config['bucket_name'])
 
-            # Set up cloud logging
-            self._setup_cloud_logging()
+            # Always log to stdout only in cloud mode to avoid GCS rate limits
+            logger.info("📝 Cloud mode: logging to stdout only (GCS logging disabled)")
         else:
             logger.info("💻 Running in LOCAL MODE")
             # Local mode - load from environment variables
