@@ -23,29 +23,39 @@ class KrakenService(BaseService):
         self.api_key = config.get('kraken_api_key')
         self.secret = config.get('kraken_api_secret') or config.get('kraken_secret')
         self.live_mode = config.get('live_mode', False)
-        
+        self.cloud_storage = config.get('cloud_storage')  # Will be passed from TradingAgent
+
         # Load pair cache
         self._pair_lookup_cache = self.load_pair_cache()
-        
+
         if not self.api_key or not self.secret:
             logger.warning("Kraken API credentials not configured - trading will be disabled")
     
     def load_pair_cache(self) -> Dict[str, str]:
-        """Load pair lookup cache from disk"""
+        """Load pair lookup cache from storage"""
         try:
-            with open('state_pair_cache.json', 'r') as f:
-                return json.load(f)
+            if self.cloud_storage:
+                cache_data = self.cloud_storage.read_json('state_pair_cache.json')
+                return cache_data if cache_data else {}
+            else:
+                # Fallback for backward compatibility
+                with open('state_pair_cache.json', 'r') as f:
+                    return json.load(f)
         except FileNotFoundError:
             return {}
         except Exception as e:
             logger.error(f"Error loading pair cache: {e}")
             return {}
-    
+
     def save_pair_cache(self):
-        """Save pair lookup cache to disk"""
+        """Save pair lookup cache to storage"""
         try:
-            with open('state_pair_cache.json', 'w') as f:
-                json.dump(self._pair_lookup_cache, f, indent=2)
+            if self.cloud_storage:
+                self.cloud_storage.write_json('state_pair_cache.json', self._pair_lookup_cache)
+            else:
+                # Fallback for backward compatibility
+                with open('state_pair_cache.json', 'w') as f:
+                    json.dump(self._pair_lookup_cache, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving pair cache: {e}")
     

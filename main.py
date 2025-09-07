@@ -36,23 +36,38 @@ class TradingAgent:
     
     def __init__(self):
         # Initialize secrets service first
-        self.is_cloud_mode = os.getenv('CLOUD_MODE', 'false').lower() == 'true'
+        cloud_mode_env = os.getenv('CLOUD_MODE', 'false')
+        logger.info(f"🔍 MAIN: CLOUD_MODE environment variable: '{cloud_mode_env}'")
+
+        self.is_cloud_mode = cloud_mode_env.lower() == 'true'
+        logger.info(f"🔍 MAIN: Cloud mode detected: {self.is_cloud_mode}")
 
         if self.is_cloud_mode:
             logger.info("🌐 Running in CLOUD MODE")
+            logger.info("🔍 MAIN: Initializing SecretsService...")
             self.secrets_service = SecretsService()
+            logger.info("🔍 MAIN: Getting all config from secrets...")
             self.config = self.secrets_service.get_all_config()
+            logger.info(f"🔍 MAIN: Config loaded with keys: {list(self.config.keys())}")
 
             # Initialize cloud storage
+            logger.info("🔍 MAIN: Getting GCP config...")
             gcp_config = self.secrets_service.get_gcp_config()
-            self.cloud_storage = CloudStorageService(gcp_config['bucket_name'])
+            logger.info(f"🔍 MAIN: GCP config: {gcp_config}")
+
+            bucket_name = gcp_config['bucket_name']
+            logger.info(f"🔍 MAIN: Initializing CloudStorageService with bucket: {bucket_name}")
+            self.cloud_storage = CloudStorageService(bucket_name)
+            logger.info("✅ MAIN: CloudStorageService initialized successfully")
 
             # Always log to stdout only in cloud mode to avoid GCS rate limits
             logger.info("📝 Cloud mode: logging to stdout only (GCS logging disabled)")
         else:
             logger.info("💻 Running in LOCAL MODE")
+            logger.info("🔍 MAIN: Initializing SecretsService for local mode...")
             # Local mode - load from environment variables
             self.secrets_service = SecretsService()  # Will use environment variables
+            logger.info("🔍 MAIN: Loading config from environment variables...")
             self.config = {
                 'telegram_token': os.getenv('TELEGRAM_BOT_TOKEN'),
                 'telegram_chat_id': os.getenv('TELEGRAM_CHAT_ID'),
@@ -63,9 +78,12 @@ class TradingAgent:
                 'max_trade_lifetime_hours': int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '6')),
                 'stop_loss_percentage': float(os.getenv('STOP_LOSS_PERCENTAGE', '20'))
             }
+            logger.info(f"🔍 MAIN: Local config loaded with keys: {list(self.config.keys())}")
 
             # Initialize local storage
+            logger.info("🔍 MAIN: Initializing CloudStorageService for local mode...")
             self.cloud_storage = CloudStorageService()
+            logger.info("✅ MAIN: CloudStorageService initialized for local mode")
 
             # Set up local logging
             self._setup_local_logging()
@@ -89,16 +107,29 @@ class TradingAgent:
         logger.info(f"TradingAgent initialized (max trade lifetime: {self.config['max_trade_lifetime_hours']}h)")
         logger.info(f"Stop-loss configured: {self.config['stop_loss_percentage']}% below entry price")
         logger.info(f"Live trading mode: {self.config['live_mode']}")
+        
+        # Initialize services with config and cloud storage
+        logger.info(f"🔍 MAIN: Passing cloud storage to services - is_cloud_mode: {self.is_cloud_mode}")
 
-        # Initialize services with config
-        self.telegram_service = TelegramService(self.config)
-        self.kraken_service = KrakenService(self.config)
-        self.openai_service = OpenAIService(self.config)
+        # Add cloud storage to all service configs
+        service_config = self.config.copy()
+        service_config['cloud_storage'] = self.cloud_storage
 
-        # Pass cloud storage to opportunity service
-        opportunity_config = self.config.copy()
-        opportunity_config['cloud_storage'] = self.cloud_storage
-        self.opportunity_service = OpportunityService(opportunity_config)
+        logger.info("🔍 MAIN: Initializing TelegramService...")
+        self.telegram_service = TelegramService(service_config)
+        logger.info("✅ MAIN: TelegramService initialized")
+
+        logger.info("🔍 MAIN: Initializing KrakenService...")
+        self.kraken_service = KrakenService(service_config)
+        logger.info("✅ MAIN: KrakenService initialized")
+
+        logger.info("🔍 MAIN: Initializing OpenAIService...")
+        self.openai_service = OpenAIService(service_config)
+        logger.info("✅ MAIN: OpenAIService initialized")
+
+        logger.info("🔍 MAIN: Initializing OpportunityService...")
+        self.opportunity_service = OpportunityService(service_config)
+        logger.info("✅ MAIN: OpportunityService initialized")
 
     def _setup_cloud_logging(self):
         """Set up logging for cloud environment"""
@@ -470,13 +501,11 @@ class TradingAgent:
                     # Always attempt liquidation if there's any total balance (even if available is 0)
                     if total_balance > 0:
                         logger.info(f"🎯 Liquidating {asset}: {available_balance:.8f} available, {total_balance:.8f} total")
-                        liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
-                        if liquidated_amount > 0:
-                            total_liquidated += liquidated_amount
-                        else:
-                            logger.warning(f"⚠️ Liquidation of {asset} returned $0.00 - balance may be held by orders")
+                    liquidated_amount = await self._execute_complete_liquidation(asset, available_balance, total_balance)
+                    if liquidated_amount > 0:
+                        total_liquidated += liquidated_amount
                     else:
-                        logger.info(f"ℹ️ Skipping {asset} - no balance to liquidate")
+                        logger.warning(f"⚠️ Liquidation of {asset} returned $0.00 - balance may be held by orders")
 
                 logger.info(f"✅ Liquidation completed: ${total_liquidated:.2f} in proceeds")
             else:
@@ -940,7 +969,7 @@ async def main():
     """Main function - runs a single trading cycle using last_update_id"""
     args = parse_arguments()
     agent = TradingAgent()
-
+    
     try:
         logger.info(f"Processing messages using Telegram last_update_id (backtest: {args.backtest})")
         await agent.run_cycle(is_backtest=args.backtest)

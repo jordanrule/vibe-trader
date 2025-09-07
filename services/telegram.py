@@ -17,31 +17,41 @@ class TelegramService(BaseService):
         super().__init__(config)
         self.telegram_token = config.get('telegram_token')
         self.telegram_chat_id = config.get('telegram_chat_id')
+        self.cloud_storage = config.get('cloud_storage')  # Will be passed from TradingAgent
         self.last_update_id = 0
-        
+
         if not self.telegram_token:
             raise ValueError("telegram_token is required")
-        
+
         # Load last update ID from disk
         self.last_update_id = self.load_last_update_id()
     
     def load_last_update_id(self) -> int:
         """Load the last processed Telegram update ID"""
         try:
-            with open('state_last_update_id.json', 'r') as f:
-                data = json.load(f)
-                return data.get('last_update_id', 0)
+            if self.cloud_storage:
+                data = self.cloud_storage.read_json('state_last_update_id.json')
+                return data.get('last_update_id', 0) if data else 0
+            else:
+                # Fallback for backward compatibility
+                with open('state_last_update_id.json', 'r') as f:
+                    data = json.load(f)
+                    return data.get('last_update_id', 0)
         except FileNotFoundError:
             return 0
         except Exception as e:
             logger.error(f"Error loading last update ID: {e}")
             return 0
-    
+
     def save_last_update_id(self):
         """Save the last processed Telegram update ID"""
         try:
-            with open('state_last_update_id.json', 'w') as f:
-                json.dump({'last_update_id': self.last_update_id}, f, indent=2)
+            if self.cloud_storage:
+                self.cloud_storage.write_json('state_last_update_id.json', {'last_update_id': self.last_update_id})
+            else:
+                # Fallback for backward compatibility
+                with open('state_last_update_id.json', 'w') as f:
+                    json.dump({'last_update_id': self.last_update_id}, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving last update ID: {e}")
     
