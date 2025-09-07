@@ -2,132 +2,13 @@
 
 A sophisticated cryptocurrency trading system that uses AI-powered sentiment analysis and technical indicators to make automated trading decisions.
 
-## 🚀 Quick Start
-
-### Local Development
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variables
-source .env
-
-# Run locally
-python run_system.py
-```
-
-### Cloud Run Deployment
-
-#### 1. Test Locally
-```bash
-# Test Flask app directly (no Docker needed)
-./test_manual.sh
-
-# Test with Docker (requires Docker Desktop)
-./test_local.sh
-```
-
-#### 2. Deploy to Cloud Run
-```bash
-# Set your GCP project ID
-export PROJECT_ID=your-gcp-project-id
-
-# Build and deploy
-./build_cloud_run.sh
-```
-
-#### 3. Test Deployed Service
-```bash
-# Get service URL
-SERVICE_URL=$(gcloud run services describe vibe-trader --region=us-central1 --format="value(status.url)")
-
-# Test endpoints
-curl -X GET $SERVICE_URL/health
-curl -X GET $SERVICE_URL/status
-curl -X POST $SERVICE_URL/run-cycle
-```
-
-## 📋 API Endpoints
-
-- `GET /` - Health check
-- `GET /health` - Kubernetes-style health check
-- `GET /status` - System status
-- `POST /run-cycle` - Execute trading cycle
-
-## 🔧 Configuration
-
-### Environment Variables
-- `CLOUD_MODE=true` - Enable cloud mode
-- `TELEGRAM_BOT_TOKEN` - Telegram bot token
-- `OPENAI_API_KEY` - OpenAI API key
-- `KRAKEN_API_KEY` - Kraken API key
-- `KRAKEN_API_SECRET` - Kraken API secret
-- `LIVE_MODE=false` - Enable live trading (use with caution)
-
-### Google Cloud Setup
-1. Create GCP project
-2. Enable required APIs (Cloud Run, Secret Manager, Storage)
-3. Create storage bucket
-4. Set up secrets in Secret Manager
-5. Deploy using the build script
-
-## 🐳 Docker
-
-### Build Image
-```bash
-docker build -t vibe-trader .
-```
-
-### Run Locally
-```bash
-docker run -p 8080:8080 -e CLOUD_MODE=true vibe-trader
-```
-
-## 📊 Architecture
-
-The system implements a 5-step trading cycle:
-1. Check new opportunities
-2. Analyze market data
-3. Generate AI recommendations
-4. Execute trades
-5. Monitor performance
-
-## 🛡️ Security
-
-- All secrets stored in Google Secret Manager
-- State files persisted in Google Cloud Storage
-- Live trading disabled by default
-- Comprehensive error handling
-
-## 📝 Logging
-
-- Local: Console and file logging
-- Cloud: Integrated with Google Cloud Logging
-- Telegram notifications for important events
+## Vibe Coding
 
 This project was built with an exploratory “vibe coding” approach. That means we prioritized learning quickly and stitching together real APIs into something useful. Along the way, we proved that Telegram sentiment, OpenAI analysis, Kraken trading, and simple learning signals can work together as a practical trading loop.
 
 If you plan to run this in a team setting, a fresh implementation is recommended. Treat this codebase as a design reference that validated the core ideas and integrations. In production, invest in thorough test coverage from day one so changes remain safe and predictable over time.
 
 ## Getting Started
-
-### Environment Variables
-
-#### Required Variables
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token for message monitoring | `1234567890:ABCdefGHIjklMNOpqrsTUVwxyz` |
-| `TELEGRAM_CHAT_ID` | Telegram chat ID to monitor for messages | `-1001234567890` |
-| `OPENAI_API_KEY` | OpenAI API key for sentiment analysis and portfolio decisions | `sk-...` |
-| `KRAKEN_API_KEY` | Kraken API key for trading operations | `your_kraken_api_key` |
-| `KRAKEN_SECRET` | Kraken API secret for authentication | `your_kraken_secret` |
-
-#### Optional Variables
-| Variable | Description | Default | Notes |
-|----------|-------------|---------|-------|
-| `MAX_TRADE_LIFETIME_HOURS` | Hours before opportunities expire | `6` | Controls position holding duration |
-| `STOP_LOSS_PERCENTAGE` | Stop-loss protection percentage below entry price | `20` | Controls stop loss |
-| `LIVE_MODE` | Enable live trading (vs paper trading) | `false` | Set to `true` for actual trade execution |
 
 ### API Setup
 Set up the required API accounts and keys according to each provider’s documentation, then export the environment variables listed above. That’s all the system needs to run.
@@ -156,6 +37,35 @@ python run_system.py
 
 **Note**: Keep the virtual environment activated for all subsequent runs. The system will run in paper trading mode by default (`LIVE_MODE=false`). Set `LIVE_MODE=true` only when you're ready for live trading.
 
+### Environment Variables
+- `LIVE_MODE=false` - Enable live trading
+- `CLOUD_MODE=true` - Enable cloud mode
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token
+- `OPENAI_API_KEY` - OpenAI API key
+- `KRAKEN_API_KEY` - Kraken API key
+- `KRAKEN_API_SECRET` - Kraken API secret
+- `MAX_TRADE_LIFETIME_HOURS` - Trade lifetime
+- `STOP_LOSS_PERCENTAGE` - Stop loss
+
+### Google Cloud Setup
+1. Create GCP project
+2. Enable required APIs (Cloud Run, Secret Manager, Storage)
+3. Create storage bucket
+4. Set up secrets in Secret Manager
+5. Deploy using Cloud Build
+
+### Docker
+
+Build Image
+```bash
+docker build -t vibe-trader .
+```
+
+Run Locally
+```bash
+docker run -p 8080:8080 -e CLOUD_MODE=true vibe-trader
+```
+
 **Python Version Requirements:**
 - **Recommended**: Python 3.8 or higher
 - **Minimum**: Python 3.7 (may require package version adjustments)
@@ -174,17 +84,9 @@ python run_system.py
 - **Trade Decision Logic**: Considers sentiment strength, technical confirmation, costs, and how current positions are doing
 - **Holding Bias**: Prefers holding until `MAX_TRADE_LIFETIME_HOURS` unless a clearly better, high‑trust opportunity appears
 
-## Architecture
-- **Main Loop** (`main.py`): Service-oriented orchestrator running every hour via `run_system.py`
-- **Telegram Service** (`services/telegram.py`): Handles message polling and update tracking
-- **Kraken Service** (`services/kraken.py`): Manages market data, balance queries, and order execution
-- **OpenAI Service** (`services/openai.py`): Processes sentiment analysis and portfolio recommendations
-- **Opportunity Service** (`services/opportunity.py`): Manages trading opportunities, technical analysis, and bandit model
-- **APIs**: Integrates with Telegram Bot API, OpenAI GPT, Kraken REST API
-
 ## Workflow
 
-It is recommended that it runs every hour to check new opportunities and rebalance it's single holding.  At any given cycle it chooses a single cryptocurrency based on sentiment and techicals.  The MAX_TRADE_LIFETIME_HOURS determines how long an opportunity exists, as well as how exit time for PnL is calculated for the bandit model.
+It is recommended that it runs every hour to check new opportunities and rebalance it's single holding.  At any given cycle it chooses a single cryptocurrency based on sentiment and techicals.  The MAX_TRADE_LIFETIME_HOURS determines how long an opportunity exists, as well as how exit time for PnL is calculated for the performance model.
 
 ### 1. Opportunity Lifecycle Management
 - **Expired Opportunity Cleanup**: Automatically clears opportunities older than `MAX_TRADE_LIFETIME_HOURS` (default: 6 hours)
@@ -192,7 +94,7 @@ It is recommended that it runs every hour to check new opportunities and rebalan
 - **PnL Recording**: Expired opportunities trigger buy-and-hold PnL calculations based on entry price vs current market price
 - **State Management**: Removes expired opportunities from active tracking while preserving performance data
 
-### 2. Bandit Model Updates
+### 2. Performance Model Updates
 - **Incremental Processing**: Only processes new outcomes from `state_performance.json` to avoid redundant calculations
 - **Trust Score Calculation**: Computed as historical performance from inception to `MAX_TRADE_LIFETIME_HOURS` based on buy-and-hold returns, weighted by outcome frequency
 - **Source Performance Tracking**: Maintains per-source statistics including success rate, average profit/loss, and total trades processed
@@ -232,36 +134,3 @@ It is recommended that it runs every hour to check new opportunities and rebalan
 - **Calculation**: `(current_price * (1 - stop_loss_percentage / 100))`
 - **Coverage**: Applied to entire position size for comprehensive risk management
 - **Kraken Integration**: Uses conditional close orders for automatic execution
-
-## Bandit Reward Model
-- **Training Limitation**: Cannot be trained offline due to Telegram Bot API restrictions on historical message access
-- **Live Learning**: Exclusively updated during live trading cycles with real P&L outcomes
-- **Performance Tracking**: Records buy-and-hold returns from opportunity entry to `MAX_TRADE_LIFETIME_HOURS` expiry
-- **Trust Score Evolution**: Source reliability scores improve over time based on actual trading performance
-- **Outcome Processing**: Handles both successful (profitable) and failed (unprofitable) trades to refine future signal filtering
-
-## Components
-
-### Service Architecture
-- **TelegramService**: Message polling, update ID management, and real-time message processing
-- **KrakenService**: Balance queries, order execution, market data retrieval, and price validation
-- **OpenAIService**: Sentiment analysis, technical indicator processing, and portfolio recommendations
-- **OpportunityService**: Technical analysis, bandit model management, and opportunity lifecycle tracking
-
-### Key Configuration Variables
-- `MAX_TRADE_LIFETIME_HOURS`: Opportunity expiry time (default: 6)
-- `STOP_LOSS_PERCENTAGE`: Stop-loss protection level (default: 20)
-- `TELEGRAM_BOT_TOKEN`: Telegram Bot API authentication
-- `KRAKEN_API_KEY`: Kraken API authentication
-- `OPENAI_API_KEY`: OpenAI API authentication
-
-## Trade Logging
-All trade factors are comprehensively logged including:
-- Message content, sender, and timestamp
-- Sentiment score and detected cryptocurrency assets
-- Technical indicators (SMA, EMA, MACD, RSI, Bollinger Bands, volume metrics)
-- Bandit trust score and confidence metrics
-- Trade parameters (size, direction, stop-loss percentage, entry price)
-- Order execution details (limit vs market, partial fills, fees)
-- Actual P&L outcomes (buy-and-hold returns, duration held)
-- Bandit model updates and performance statistics
