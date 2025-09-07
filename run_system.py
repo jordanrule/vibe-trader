@@ -41,41 +41,27 @@ class LiveTradingRunner:
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
     
-    async def run_cycle(self, bootstrap=False):
+    async def run_cycle(self):
         """Run a single trading cycle by calling main.py"""
         try:
             self.cycle_count += 1
             current_time = datetime.now()
-            
+
             logger.info(f"🔄 Starting trading cycle #{self.cycle_count} at {current_time}")
-            
-            # Calculate time range
-            if bootstrap:
-                # For bootstrap, look back max_trade_lifetime_hours
-                max_trade_lifetime_hours = int(os.getenv('MAX_TRADE_LIFETIME_HOURS', '6'))
-                from_time = current_time - timedelta(hours=max_trade_lifetime_hours)
-                logger.info(f"🚀 Bootstrap mode: looking back {max_trade_lifetime_hours} hours")
-            else:
-                # Normal mode: look back 1 hour
-                from_time = current_time - timedelta(hours=1)
-            
-            to_time = current_time
-            
-            # Build command
+
+            # Build command - simplified, just run main.py
             cmd = [
-                sys.executable, 'main.py',
-                '--from', from_time.isoformat(),
-                '--to', to_time.isoformat()
+                sys.executable, 'main.py'
             ]
-            
+
             logger.info(f"Executing: {' '.join(cmd)}")
-            
+
             # Run main.py as subprocess
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=600  # 10 minute timeout (increased for complex operations)
             )
             
             if result.returncode == 0:
@@ -104,7 +90,7 @@ class LiveTradingRunner:
                             print(line)
             
         except subprocess.TimeoutExpired:
-            logger.error(f"❌ Trading cycle #{self.cycle_count} timed out after 5 minutes")
+            logger.error(f"❌ Trading cycle #{self.cycle_count} timed out after 10 minutes")
         except Exception as e:
             logger.error(f"❌ Error in trading cycle #{self.cycle_count}: {e}")
     
@@ -114,24 +100,23 @@ class LiveTradingRunner:
             logger.info("🚀 Starting Live Trading System...")
             logger.info("📅 Running main.py every hour")
             logger.info("⏰ Press Ctrl+C to stop")
-            
+
             self.running = True
             self.start_time = datetime.now()
-            
-            # Run initial cycle immediately
-            await self.run_cycle()
-            
-            # Then run every hour
+
+            # Run cycles every hour
             while self.running:
-                # Wait for 1 hour (3600 seconds)
-                for _ in range(3600):
-                    if not self.running:
-                        break
-                    await asyncio.sleep(1)
-                
+                # Run cycle immediately
+                await self.run_cycle()
+
+                # Wait for 1 hour before next cycle
                 if self.running:
-                    await self.run_cycle()
-            
+                    logger.info("⏳ Waiting 1 hour before next cycle...")
+                    for _ in range(3600):  # 3600 seconds = 1 hour
+                        if not self.running:
+                            break
+                        await asyncio.sleep(1)
+
         except KeyboardInterrupt:
             logger.info("Received keyboard interrupt, shutting down...")
         except Exception as e:
@@ -156,29 +141,18 @@ def parse_arguments():
         action='store_true',
         help='Run a single test cycle and exit'
     )
-    parser.add_argument(
-        '--bootstrap',
-        action='store_true',
-        help='For first iteration, look back max_trade_lifetime_hours instead of 1 hour'
-    )
     return parser.parse_args()
 
 async def main():
     """Main function"""
     args = parse_arguments()
     runner = LiveTradingRunner()
-    
+
     if args.test:
         logger.info("🧪 Running test cycle...")
-        await runner.run_cycle(bootstrap=args.bootstrap)
+        await runner.run_cycle()
         logger.info("✅ Test cycle completed")
     else:
-        # For continuous mode, only use bootstrap on the first cycle
-        if args.bootstrap:
-            logger.info("🚀 Bootstrap mode enabled - first cycle will look back max_trade_lifetime_hours")
-            await runner.run_cycle(bootstrap=True)
-            # Reset bootstrap flag for subsequent cycles
-            args.bootstrap = False
         await runner.run()
 
 if __name__ == "__main__":

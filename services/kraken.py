@@ -397,7 +397,7 @@ class KrakenService(BaseService):
             logger.error(f"Error placing market order: {e}")
             return None
 
-    def place_limit_order(self, pair: str, order_type: str, volume: float, price: float, stop_loss: Optional[float] = None, post_only: bool = True) -> Optional[str]:
+    def place_limit_order(self, pair: str, order_type: str, volume: float, price: float, stop_loss: Optional[float] = None, post_only: bool = True, allow_fallback: bool = True) -> Optional[str]:
         """
         Place a limit order on Kraken with optional stop-loss
 
@@ -408,6 +408,7 @@ class KrakenService(BaseService):
             price: Limit price
             stop_loss: Optional stop loss price
             post_only: Whether to make order post-only (default: True)
+            allow_fallback: Whether to fallback to non-post-only if post-only fails (default: True)
 
         Returns:
             Order ID if successful, None otherwise
@@ -433,6 +434,7 @@ class KrakenService(BaseService):
             }
 
             # Add post-only flag to avoid taker fees
+            order_type_desc = "post-only limit" if post_only else "limit"
             if post_only:
                 data['oflags'] = 'post'
 
@@ -449,9 +451,9 @@ class KrakenService(BaseService):
                     data['close[ordertype]'] = 'stop-loss'
                     data['close[price]'] = str(rounded_stop_loss)
 
-                logger.info(f"Placing {order_type} limit order: {rounded_volume} {pair} at ${rounded_price} with stop-loss at ${rounded_stop_loss}")
+                logger.info(f"Placing {order_type_desc} {order_type}: {rounded_volume} {pair} at ${rounded_price} with stop-loss at ${rounded_stop_loss}")
             else:
-                logger.info(f"Placing {order_type} limit order: {rounded_volume} {pair} at ${rounded_price}")
+                logger.info(f"Placing {order_type_desc} {order_type}: {rounded_volume} {pair} at ${rounded_price}")
 
             # Handle paper trading mode vs live trading mode
             if not self.live_mode:
@@ -466,9 +468,27 @@ class KrakenService(BaseService):
                 if result and 'txid' in result:
                     order_id = result['txid'][0]
                     logger.info(f"Limit order placed successfully: {order_id}")
+
+                    # Verify order was actually created by checking it exists
+                    if not order_id.startswith('PAPER_'):
+                        time.sleep(0.2)  # Brief delay for order to be processed
+                        order_status = self.get_order_status(order_id)
+                        if not order_status:
+                            logger.warning(f"Order {order_id} was placed but not found in order status - possible timing issue")
+                        else:
+                            status = order_status.get('status', 'unknown')
+                            logger.info(f"Order {order_id} verified: status={status}")
+
+                            # If order was cancelled immediately and we used post-only, try again without post-only
+                            if status in ['canceled', 'expired'] and post_only and allow_fallback:
+                                logger.warning(f"Post-only order {order_id} was cancelled immediately - retrying without post-only")
+                                return self.place_limit_order(pair, order_type, volume, price, stop_loss, post_only=False, allow_fallback=False)
+
                     return order_id
                 else:
                     logger.error(f"Failed to place limit order: {result}")
+                    if result and 'error' in result:
+                        logger.error(f"Kraken API error: {result['error']}")
                     return None
 
         except Exception as e:
@@ -483,6 +503,32 @@ class KrakenService(BaseService):
         except Exception as e:
             logger.error(f"Error getting open orders: {e}")
             return {}
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get status of a specific order"""
+        try:
+            # Handle paper trading order IDs
+            if order_id.startswith('PAPER_'):
+                return {'status': 'closed', 'type': 'paper'}
+
+            # Query specific order status
+            result = self.private_request('QueryOrders', {'txid': order_id})
+
+            if result and order_id in result:
+                order_info = result[order_id]
+                return {
+                    'status': order_info.get('status', 'unknown'),
+                    'type': order_info.get('descr', {}).get('type', 'unknown'),
+                    'price': order_info.get('descr', {}).get('price', '0'),
+                    'volume': order_info.get('vol', '0'),
+                    'filled': order_info.get('vol_exec', '0')
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting order status for {order_id}: {e}")
+            return None
     
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order"""
@@ -649,18 +695,43 @@ class KrakenService(BaseService):
             if order_id.startswith('PAPER_'):
                 logger.info(f"Paper trading order {order_id} - simulating as filled")
                 return True
-            
+
+            # Add a small delay to allow order to be processed
+            import time
+            time.sleep(0.5)
+
             # Check open orders
             open_orders = self.get_open_orders()
-            
+
             # If order is not in open orders, it's likely filled or cancelled
             if order_id not in open_orders:
-                logger.info(f"Order {order_id} not found in open orders - assuming filled")
+                # Double-check by querying specific order status
+                order_status = self.get_order_status(order_id)
+                if order_status and order_status.get('status') in ['closed', 'filled']:
+                    logger.info(f"Order {order_id} confirmed filled via status check")
+                    return True
+                elif order_status and order_status.get('status') in ['canceled', 'expired']:
+                    logger.warning(f"Order {order_id} was cancelled/expired")
+                    return False  # Order failed, not filled
+                else:
+                    logger.info(f"Order {order_id} not found in open orders - assuming filled")
+                    return True
+
+            # Order is still in open orders
+            order_info = open_orders.get(order_id, {})
+            status = order_info.get('status', 'unknown')
+            logger.info(f"Order {order_id} status: {status}")
+
+            # Check if order is filled based on status
+            if status in ['closed', 'filled']:
+                logger.info(f"Order {order_id} confirmed filled")
                 return True
-            
-            logger.info(f"Order {order_id} still open")
+            elif status in ['canceled', 'expired']:
+                logger.warning(f"Order {order_id} was cancelled/expired")
+                return False
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Error checking if order {order_id} is filled: {e}")
             return False
@@ -728,20 +799,36 @@ class KrakenService(BaseService):
                 logger.warning(f"Could not get current price for {pair}, falling back to market order")
                 return self.place_market_order(pair, order_type, volume, stop_loss)
 
-            # Calculate initial limit price (0.5% offset)
-            price_offset_pct = 0.005
+            # Calculate initial limit price (1.5% offset for better margin)
+            price_offset_pct = 0.015
             if order_type == 'buy':
                 limit_price = current_price * (1 + price_offset_pct)
             else:  # sell
                 limit_price = current_price * (1 - price_offset_pct)
 
-            # Place initial limit order (post-only to avoid taker fees)
-            current_order_id = self.place_limit_order(pair, order_type, volume, limit_price, stop_loss, post_only=True)
+            # Determine if post-only is appropriate based on price distance from market
+            price_distance_pct = abs(limit_price - current_price) / current_price
+            use_post_only = price_distance_pct > 0.005  # Only use post-only if > 0.5% from market (increased for better margin)
+
+            if not use_post_only:
+                logger.info(f"Limit price too close to market ({price_distance_pct:.2%}) - using regular limit order instead of post-only")
+
+            # Place initial limit order
+            current_order_id = self.place_limit_order(pair, order_type, volume, limit_price, stop_loss, post_only=use_post_only, allow_fallback=True)
             if not current_order_id:
                 logger.warning("Initial limit order failed, falling back to market order")
                 return self.place_market_order(pair, order_type, volume, stop_loss)
 
-            logger.info(f"📋 Initial limit {order_type} at ${limit_price:.4f} (current: ${current_price:.4f}) - Order: {current_order_id}")
+            order_type_desc = "post-only limit" if use_post_only else "limit"
+            logger.info(f"📋 Initial {order_type_desc} {order_type} at ${limit_price:.4f} (current: ${current_price:.4f}) - Order: {current_order_id}")
+
+            # Small delay to allow order to be processed before checking status
+            time.sleep(1.0)
+
+            # Do initial status check
+            if self.is_order_filled(current_order_id):
+                logger.info(f"✅ Limit order {current_order_id} completed successfully (immediate fill)")
+                return current_order_id
 
             # Monitor and refresh price for up to 3 minutes
             start_time = time.time()
@@ -776,12 +863,20 @@ class KrakenService(BaseService):
                             else:
                                 logger.warning(f"Failed to cancel order {current_order_id}")
 
-                            # Place new order at updated price (post-only)
-                            current_order_id = self.place_limit_order(pair, order_type, volume, new_limit_price, stop_loss, post_only=True)
+                            # Determine if post-only is appropriate for the new price
+                            new_price_distance_pct = abs(new_limit_price - new_price) / new_price
+                            new_use_post_only = new_price_distance_pct > 0.005  # Only use post-only if > 0.5% from market
+
+                            if not new_use_post_only:
+                                logger.info(f"New limit price too close to market ({new_price_distance_pct:.2%}) - using regular limit order")
+
+                            # Place new order at updated price
+                            current_order_id = self.place_limit_order(pair, order_type, volume, new_limit_price, stop_loss, post_only=new_use_post_only, allow_fallback=True)
                             if current_order_id:
                                 limit_price = new_limit_price
                                 last_refresh_time = time.time()
-                                logger.info(f"📋 New limit {order_type} at ${limit_price:.4f} - Order: {current_order_id}")
+                                new_order_type_desc = "post-only limit" if new_use_post_only else "limit"
+                                logger.info(f"📋 New {new_order_type_desc} {order_type} at ${limit_price:.4f} - Order: {current_order_id}")
                             else:
                                 logger.warning("Failed to place refreshed limit order")
                                 break

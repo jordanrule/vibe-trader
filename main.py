@@ -854,14 +854,16 @@ def parse_arguments():
         '--from', '-f',
         dest='from_time',
         type=str,
-        help='Start time in ISO format (e.g., 2025-08-31T20:00:00) or "last" to use last_run.txt'
+        default=None,
+        help='Start time in ISO format (default: 15 minutes ago)'
     )
-    
+
     parser.add_argument(
         '--to', '-t',
-        dest='to_time', 
+        dest='to_time',
         type=str,
-        help='End time in ISO format (e.g., 2025-08-31T21:00:00) or "now" for current time'
+        default=None,
+        help='End time in ISO format (default: now)'
     )
     
     parser.add_argument(
@@ -873,27 +875,18 @@ def parse_arguments():
     return parser.parse_args()
 
 async def main():
-    """Main function - runs once and processes messages in specified time range"""
+    """Main function - runs the trading cycle with default time range"""
     args = parse_arguments()
     agent = TradingAgent()
-    
+
     try:
-        # Determine time range
+        # Use default time range: last 15 minutes
         current_time = datetime.now()
-        
-        if args.from_time == 'last' or args.from_time is None:
-            # Use last run time or default to 15 minutes ago
-            from_time = current_time - timedelta(minutes=15)
-        else:
-            from_time = datetime.fromisoformat(args.from_time)
-        
-        if args.to_time == 'now' or args.to_time is None:
-            to_time = current_time
-        else:
-            to_time = datetime.fromisoformat(args.to_time)
-        
+        from_time = current_time - timedelta(minutes=15)
+        to_time = current_time
+
         logger.info(f"Processing messages from {from_time} to {to_time} (backtest: {args.backtest})")
-        
+
         # Run the trading cycle
         await agent.run_cycle(from_time, to_time, args.backtest)
         
