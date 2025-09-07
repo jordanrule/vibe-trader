@@ -137,16 +137,16 @@ class TradingAgent:
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(file_handler)
     
-    async def run_cycle(self, from_time: datetime, to_time: datetime, is_backtest: bool = False):
+    async def run_cycle(self, is_backtest: bool = False):
         """
         Main trading cycle - 5 steps only
         
         Args:
-            from_time: Start time to collect messages from
-            to_time: End time to collect messages to
+            from_time: Optional start time to collect messages from. If None, use Telegram last_update_id.
+            to_time: Optional end time to collect messages to. If None, use Telegram last_update_id.
             is_backtest: If True, use historical data for analysis
         """
-        logger.info(f"Starting trading cycle from {from_time} to {to_time}")
+        logger.info("Starting trading cycle using Telegram last_update_id (no explicit timeframe)")
         
         try:
             # Step 1: Cleanup expired opportunities and record PnL
@@ -156,7 +156,7 @@ class TradingAgent:
             await self._step2_update_bandit_model()
             
             # Step 3: Check for new opportunities from Telegram messages
-            await self._step3_check_new_opportunities(from_time, to_time)
+            await self._step3_check_new_opportunities()
             
             # Step 4: Get RAG recommendation for position switching
             recommendation = await self._step4_get_rag_recommendation()
@@ -190,12 +190,12 @@ class TradingAgent:
         
         logger.info("Step 2 completed - bandit model updated")
     
-    async def _step3_check_new_opportunities(self, from_time: datetime, to_time: datetime):
+    async def _step3_check_new_opportunities(self):
         """Step 3: Check for new opportunities from Telegram messages"""
         logger.info("Step 3: Checking for new opportunities from Telegram messages")
         
         # Get Telegram messages
-        messages = self.telegram_service.check_messages(from_time, to_time)
+        messages = self.telegram_service.check_messages()
         
         if not messages:
             logger.info("No new messages to process")
@@ -929,22 +929,6 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Telegram Sentiment Trading Agent')
     
     parser.add_argument(
-        '--from', '-f',
-        dest='from_time',
-        type=str,
-        default=None,
-        help='Start time in ISO format (default: 15 minutes ago)'
-    )
-
-    parser.add_argument(
-        '--to', '-t',
-        dest='to_time',
-        type=str,
-        default=None,
-        help='End time in ISO format (default: now)'
-    )
-    
-    parser.add_argument(
         '--backtest',
         action='store_true',
         help='Use historical data for analysis (for backtesting)'
@@ -953,20 +937,13 @@ def parse_arguments():
     return parser.parse_args()
 
 async def main():
-    """Main function - runs the trading cycle with default time range"""
+    """Main function - runs a single trading cycle using last_update_id"""
     args = parse_arguments()
     agent = TradingAgent()
 
     try:
-        # Use default time range: last 15 minutes
-        current_time = datetime.now()
-        from_time = current_time - timedelta(minutes=15)
-        to_time = current_time
-
-        logger.info(f"Processing messages from {from_time} to {to_time} (backtest: {args.backtest})")
-
-        # Run the trading cycle
-        await agent.run_cycle(from_time, to_time, args.backtest)
+        logger.info(f"Processing messages using Telegram last_update_id (backtest: {args.backtest})")
+        await agent.run_cycle(is_backtest=args.backtest)
         
         logger.info("Trading cycle completed successfully")
         

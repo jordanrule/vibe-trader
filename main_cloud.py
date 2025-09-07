@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import json
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from main import TradingAgent
 
@@ -44,16 +45,15 @@ def health_check():
 
 @app.route('/run-cycle', methods=['POST'])
 def run_cycle():
-    """Run a trading cycle"""
+    """Run a single trading cycle with default time window (last 15 minutes)"""
     try:
         logger.info("🚀 Starting trading cycle via HTTP request")
 
         # Get trading agent
         agent = get_trading_agent()
 
-        # Run the trading cycle asynchronously
-        # Note: Flask doesn't support async routes easily, so we'll run synchronously
-        result = asyncio.run(agent.run_cycle())
+        # Run without explicit timeframe: use Telegram last_update_id internally
+        asyncio.run(agent.run_cycle(is_backtest=False))
 
         logger.info("✅ Trading cycle completed successfully")
 

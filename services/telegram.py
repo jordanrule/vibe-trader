@@ -45,27 +45,21 @@ class TelegramService(BaseService):
         except Exception as e:
             logger.error(f"Error saving last update ID: {e}")
     
-    def check_messages(self, from_time: datetime, to_time: datetime) -> List[Dict]:
+    def check_messages(self) -> List[Dict]:
         """
-        Check for Telegram messages between from_time and to_time
-        
-        Note: Telegram Bot API only supports recent messages via getUpdates.
-        Historical messages by time range are not supported.
-        
-        Args:
-            from_time: Start timestamp to collect messages from
-            to_time: End timestamp to collect messages to
+        Check for new Telegram messages using last_update_id.
+
+        Returns messages received since the last processed update.
         """
         try:
-            logger.info(f"Checking for Telegram messages between {from_time} and {to_time}")
-            return self._get_recent_updates(from_time, to_time)
-            
+            logger.info("Checking for new Telegram messages (using last_update_id)")
+            return self._get_recent_updates()
         except Exception as e:
             logger.error(f"Error checking Telegram messages: {e}")
             return []
     
-    def _get_recent_updates(self, from_time: datetime, to_time: datetime) -> List[Dict]:
-        """Get recent updates using getUpdates method with proper offset tracking"""
+    def _get_recent_updates(self) -> List[Dict]:
+        """Get recent updates using getUpdates with offset tracking"""
         try:
             url = f"https://api.telegram.org/bot{self.telegram_token}/getUpdates"
             params = {
@@ -93,34 +87,28 @@ class TelegramService(BaseService):
                 # Save the updated ID
                 self.save_last_update_id()
             
-            # Convert to timestamps for comparison
-            from_timestamp = from_time.timestamp()
-            to_timestamp = to_time.timestamp()
-            
             for update in updates:
                 if 'message' in update:
                     message = update['message']
                     message_timestamp = message.get('date', 0)
                     message_date = datetime.fromtimestamp(message_timestamp)
-                    
-                    # Only process messages within the specified time range
-                    if from_timestamp <= message_timestamp <= to_timestamp:
-                        messages.append({
-                            'update_id': update['update_id'],
-                            'message_id': message['message_id'],
-                            'text': message.get('text', ''),
-                            'date': message_date,
-                            'timestamp': message_timestamp,
-                            'from': message.get('from', {}),
-                            'chat': message.get('chat', {})
-                        })
-                        
-                        # Print the message for debugging
-                        user = message.get('from', {})
-                        username = user.get('username', user.get('first_name', 'Unknown'))
-                        print(f"📱 Message from {username} ({message_date}): {message.get('text', '')}")
-            
-            logger.info(f"Found {len(messages)} recent messages between {from_time} and {to_time}")
+
+                    messages.append({
+                        'update_id': update['update_id'],
+                        'message_id': message['message_id'],
+                        'text': message.get('text', ''),
+                        'date': message_date,
+                        'timestamp': message_timestamp,
+                        'from': message.get('from', {}),
+                        'chat': message.get('chat', {})
+                    })
+
+                    # Print the message for debugging
+                    user = message.get('from', {})
+                    username = user.get('username', user.get('first_name', 'Unknown'))
+                    print(f"📱 Message from {username} ({message_date}): {message.get('text', '')}")
+
+            logger.info(f"Found {len(messages)} new messages since last_update_id")
             return messages
             
         except requests.exceptions.RequestException as e:
