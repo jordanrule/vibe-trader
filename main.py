@@ -70,27 +70,19 @@ class TradingAgent:
             # Set up local logging
             self._setup_local_logging()
 
-        # Validate required configuration
+        # Validate required configuration (accept secrets-loaded config too)
         required_keys = ['telegram_token', 'openai_api_key', 'kraken_api_key', 'kraken_api_secret']
-        missing_vars = []
+        missing = [k for k in required_keys if not self.config.get(k)]
 
-        for key in required_keys:
-            if not self.config.get(key):
-                # Provide helpful error messages for missing environment variables
-                if key == 'telegram_token':
-                    missing_vars.append("TELEGRAM_BOT_TOKEN")
-                elif key == 'openai_api_key':
-                    missing_vars.append("OPENAI_API_KEY")
-                elif key == 'kraken_api_key':
-                    missing_vars.append("KRAKEN_API_KEY or NEW_KRAKEN_API_KEY")
-                elif key == 'kraken_api_secret':
-                    missing_vars.append("KRAKEN_API_SECRET or KRAKEN_SECRET or NEW_KRAKEN_SECRET")
-
-        if missing_vars:
-            error_msg = "Missing required environment variables:\n"
-            for var in missing_vars:
-                error_msg += f"  - {var}\n"
-            error_msg += "\nPlease set these environment variables before running the system."
+        if missing:
+            # If in cloud mode, allow credentials to come from SecretsService.
+            # Provide a clear message mentioning both env vars and secrets.
+            error_msg = "Missing required configuration keys:\n"
+            for k in missing:
+                error_msg += f"  - {k}\n"
+            error_msg += ("\nProvide these via Secret Manager (recommended in cloud) or environment variables."
+                          " If using Secret Manager, ensure the Cloud Run service account has Secret Accessor"
+                          " and the secrets exist: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, KRAKEN_API_KEY, KRAKEN_API_SECRET.")
             raise ValueError(error_msg)
 
         # Log configuration

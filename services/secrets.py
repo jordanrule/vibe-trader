@@ -119,19 +119,27 @@ class SecretsService:
         """Get all configuration from secrets"""
         config = {}
 
-        # Try to get all credentials
+        # Try to get all credentials and normalize keys to app-wide names
         try:
-            config.update(self.get_kraken_credentials())
+            kraken = self.get_kraken_credentials()
+            if kraken:
+                # Normalize to expected keys
+                config['kraken_api_key'] = kraken.get('api_key') or kraken.get('kraken_api_key')
+                config['kraken_api_secret'] = kraken.get('api_secret') or kraken.get('kraken_api_secret')
         except ValueError:
             logger.warning("Kraken credentials not available")
 
         try:
-            config.update(self.get_openai_credentials())
+            openai = self.get_openai_credentials()
+            if openai:
+                config['openai_api_key'] = openai.get('api_key') or openai.get('openai_api_key')
         except ValueError:
             logger.warning("OpenAI credentials not available")
 
         try:
-            config.update(self.get_telegram_credentials())
+            telegram = self.get_telegram_credentials()
+            if telegram:
+                config['telegram_token'] = telegram.get('api_token') or telegram.get('telegram_token')
         except ValueError:
             logger.warning("Telegram credentials not available")
 
