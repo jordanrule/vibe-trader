@@ -454,7 +454,7 @@ class TradingAgent:
             total_balances = {}
 
             # Define fiat/stable assets
-            fiat_assets = {'ZUSD', 'USDT', 'USDC'}
+            fiat_assets = {'ZUSD', 'USD', 'USDT', 'USDC'}
 
             for asset, balance_entry in balances.items():
                 try:
@@ -475,6 +475,31 @@ class TradingAgent:
 
             logger.info(f"📊 Current positions: {list(current_positions.keys())}")
 
+            # Compute USD shares including cash for >5% filter
+            total_portfolio_value = 0.0
+            asset_usd_values = {}
+            for a, bal in total_balances.items():
+                try:
+                    if a in fiat_assets:
+                        usd_val = float(bal)
+                    else:
+                        common_a = self._map_to_common_asset(a)
+                        price = await self._get_current_price(common_a)
+                        usd_val = float(bal) * price if price else 0.0
+                    asset_usd_values[a] = usd_val
+                    total_portfolio_value += usd_val
+                except (TypeError, ValueError):
+                    continue
+
+            filtered_assets = set()
+            if total_portfolio_value > 0:
+                for a, v in asset_usd_values.items():
+                    if a in fiat_assets:
+                        continue
+                    share = (v / total_portfolio_value) * 100.0
+                    if share > 5.0:
+                        filtered_assets.add(a)
+
             # Step 1: Liquidate ALL positions that are NOT the recommended asset
             assets_to_liquidate = []
             for asset in current_positions.keys():
@@ -485,6 +510,11 @@ class TradingAgent:
                 # Check if this asset matches the recommended asset
                 if self._assets_match(asset, recommended_asset):
                     logger.info(f"⏸️  Keeping recommended asset: {asset}")
+                    continue
+
+                # Enforce >5% threshold including cash
+                if asset not in filtered_assets:
+                    logger.info(f"Skipping {asset} - below 5% threshold including cash")
                     continue
 
                 assets_to_liquidate.append(asset)
