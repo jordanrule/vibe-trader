@@ -10,6 +10,7 @@ import logging
 import requests
 import time
 import urllib.parse
+import threading
 from typing import Dict, List, Optional
 from .base import BaseService
 
@@ -25,11 +26,57 @@ class KrakenService(BaseService):
         self.live_mode = config.get('live_mode', False)
         self.cloud_storage = config.get('cloud_storage')  # Will be passed from TradingAgent
 
+        # Nonce management
+        self._nonce_lock = threading.Lock()
+        self._nonce_state_path = 'state_kraken_nonce.json'
+        self._last_nonce = self._load_last_nonce()
+
         # Load pair cache
         self._pair_lookup_cache = self.load_pair_cache()
 
         if not self.api_key or not self.secret:
             logger.warning("Kraken API credentials not configured - trading will be disabled")
+
+    def _load_last_nonce(self) -> int:
+        """Load last used nonce from storage to ensure strictly increasing nonces across restarts."""
+        try:
+            data = {}
+            if self.cloud_storage:
+                data = self.cloud_storage.read_json(self._nonce_state_path) or {}
+                logger.info(f"Loaded last Kraken nonce from GCS: {data.get('last_nonce', 0)}")
+            else:
+                try:
+                    with open(self._nonce_state_path, 'r') as f:
+                        data = json.load(f)
+                except FileNotFoundError:
+                    data = {}
+            last = int(data.get('last_nonce', 0))
+            return last if last >= 0 else 0
+        except Exception as e:
+            logger.warning(f"Could not load last nonce: {e}")
+            return 0
+
+    def _save_last_nonce(self, nonce: int) -> None:
+        """Persist last used nonce to storage (best-effort)."""
+        try:
+            payload = {"last_nonce": int(nonce), "updated_at": int(time.time())}
+            if self.cloud_storage:
+                self.cloud_storage.write_json(self._nonce_state_path, payload)
+            else:
+                with open(self._nonce_state_path, 'w') as f:
+                    json.dump(payload, f)
+        except Exception as e:
+            logger.warning(f"Failed to persist Kraken nonce: {e}")
+
+    def _next_nonce(self) -> int:
+        """Generate a strictly increasing nonce (ms) even across restarts and concurrent calls."""
+        with self._nonce_lock:
+            now_ms = int(time.time() * 1000)
+            next_nonce = max(now_ms, self._last_nonce + 1)
+            self._last_nonce = next_nonce
+            # Best-effort persist without blocking hot path too much
+            self._save_last_nonce(next_nonce)
+            return next_nonce
     
     def load_pair_cache(self) -> Dict[str, str]:
         """Load pair lookup cache from storage"""
@@ -89,34 +136,46 @@ class KrakenService(BaseService):
         if data is None:
             data = {}
         
-        # Add nonce with small delay to prevent conflicts
-        time.sleep(0.1)  # 100ms delay between API calls
-        data['nonce'] = str(int(time.time() * 1000))
-        
         url = f"https://api.kraken.com/0/private/{endpoint}"
         urlpath = f"/0/private/{endpoint}"
-        
-        headers = {
-            'API-Key': self.api_key,
-            'API-Sign': self.sign_request(urlpath, data),
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        
-        try:
-            response = requests.post(url, headers=headers, data=data, timeout=30)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if result.get('error'):
-                logger.error(f"Kraken API error: {result['error']}")
-                return {}
-            
-            return result.get('result', {})
-            
-        except Exception as e:
-            logger.error(f"Kraken private API request failed: {e}")
-            return {}
+
+        # Retry a few times on Invalid nonce
+        for attempt in range(3):
+            try:
+                # Add strictly increasing nonce
+                req_data = dict(data)
+                req_data['nonce'] = str(self._next_nonce())
+
+                headers = {
+                    'API-Key': self.api_key,
+                    'API-Sign': self.sign_request(urlpath, req_data),
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+
+                response = requests.post(url, headers=headers, data=req_data, timeout=30)
+                response.raise_for_status()
+
+                result = response.json()
+
+                if result.get('error'):
+                    errors = result.get('error', [])
+                    logger.error(f"Kraken API error: {errors}")
+                    # Retry on invalid nonce
+                    if any('EAPI:Invalid nonce' in str(e) for e in errors):
+                        sleep_s = 0.2 * (attempt + 1)
+                        logger.warning(f"Retrying due to invalid nonce (attempt {attempt+1}/3) after {sleep_s:.1f}s")
+                        time.sleep(sleep_s)
+                        continue
+                    return {}
+
+                return result.get('result', {})
+
+            except Exception as e:
+                logger.error(f"Kraken private API request failed (attempt {attempt+1}/3): {e}")
+                time.sleep(0.2 * (attempt + 1))
+
+        # All retries failed
+        return {}
     
     def public_request(self, endpoint: str, params: Dict = None) -> Dict:
         """Make request to Kraken public API"""
