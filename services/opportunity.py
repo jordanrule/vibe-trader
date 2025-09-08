@@ -18,12 +18,18 @@ class OpportunityService(BaseService):
         super().__init__(config)
         self.max_trade_lifetime_hours = config.get('max_trade_lifetime_hours', 6)
         self.cloud_storage = config.get('cloud_storage')  # Will be passed from TradingAgent
+        if self.cloud_storage:
+            try:
+                logger.info(f"OpportunityService using GCS bucket: {getattr(self.cloud_storage, 'bucket_name', 'UNKNOWN')}")
+            except Exception:
+                logger.info("OpportunityService using GCS storage (bucket name unavailable)")
         self.opportunities = self.load_opportunities()
         self.bandit_source_stats = self.load_bandit_model()
     
     def load_opportunities(self) -> Dict:
         """Load trading opportunities from storage"""
         if self.cloud_storage:
+            logger.info(f"Loading opportunities from GCS bucket: {getattr(self.cloud_storage, 'bucket_name', 'UNKNOWN')}")
             return self.cloud_storage.read_json('state_opportunities.json')
         else:
             # Fallback for backward compatibility
@@ -39,6 +45,7 @@ class OpportunityService(BaseService):
     def save_opportunities(self):
         """Save trading opportunities to storage"""
         if self.cloud_storage:
+            logger.info(f"Saving opportunities to GCS bucket: {getattr(self.cloud_storage, 'bucket_name', 'UNKNOWN')} (state_opportunities.json)")
             self.cloud_storage.write_json('state_opportunities.json', self.opportunities)
         else:
             # Fallback for backward compatibility
@@ -641,6 +648,40 @@ class OpportunityService(BaseService):
                         })
 
                     if portfolio_data:
+                        # Compute dominant holding share
+                        try:
+                            totals = []
+                            for item in portfolio_data:
+                                totals.append((item['asset'], float(item.get('current_price', 0.0))))
+                            # Recompute USD using a neutral 1 unit position; instead, use valid_positions and balances
+                            # Build actual USD shares
+                            usd_values = {}
+                            total_usd = 0.0
+                            for asset, price in valid_positions.items():
+                                bal = float(current_positions.get(asset, 0.0))
+                                usd_val = bal * price
+                                usd_values[asset] = usd_val
+                                total_usd += usd_val
+                            dominant_asset = None
+                            dominant_share = 0.0
+                            if total_usd > 0:
+                                for asset, usd_val in usd_values.items():
+                                    share = (usd_val / total_usd) * 100.0
+                                    if share > dominant_share:
+                                        dominant_share = share
+                                        dominant_asset = asset
+                        except Exception:
+                            dominant_asset = None
+                            dominant_share = 0.0
+
+                        # If dominant share > 50%, keep only that asset; else pass none
+                        if dominant_asset and dominant_share > 50.0:
+                            portfolio_data = [p for p in portfolio_data if p['asset'] == dominant_asset]
+                            current_positions_summary = [f"{portfolio_data[0]['asset']}: ${portfolio_data[0]['current_price']:.2f}"]
+                        else:
+                            portfolio_data = []
+                            current_positions_summary = []
+
                         # Collect all unique sources from portfolio data
                         sources_in_portfolio = set()
                         for item in portfolio_data:
@@ -657,6 +698,65 @@ class OpportunityService(BaseService):
                                     'avg_profit': self.bandit_source_stats[source]['avg_profit'],
                                     'success_rate': self.bandit_source_stats[source]['success_rate']
                                 }
+
+                        # Filter current positions by USD share > 5%, and optionally reduce to dominant > 50%
+                        try:
+                            # Build USD values from actual balances and prices we captured in valid_positions
+                            usd_values = {}
+                            crypto_total_usd = 0.0
+                            for asset, price in valid_positions.items():
+                                bal = float(current_positions.get(asset, 0.0))
+                                usd_val = bal * float(price)
+                                if usd_val > 0:
+                                    usd_values[asset] = usd_val
+                                    crypto_total_usd += usd_val
+
+                            # Include fiat balances in total denominator
+                            fiat_codes = {'ZUSD', 'USD', 'USDT', 'USDC'}
+                            fiat_total_usd = 0.0
+                            for fiat in fiat_codes:
+                                if fiat in current_positions:
+                                    try:
+                                        fiat_total_usd += float(current_positions.get(fiat, 0.0))
+                                    except (TypeError, ValueError):
+                                        continue
+
+                            total_usd = crypto_total_usd + fiat_total_usd
+
+                            # Determine dominant crypto asset and share (vs total incl. fiat)
+                            dominant_asset = None
+                            dominant_share = 0.0
+                            if total_usd > 0:
+                                for asset, usd_val in usd_values.items():
+                                    share = (usd_val / total_usd) * 100.0
+                                    if share > dominant_share:
+                                        dominant_share = share
+                                        dominant_asset = asset
+
+                            # Filter to >5% crypto assets (vs total incl. fiat)
+                            top_assets = set()
+                            if total_usd > 0:
+                                for asset, usd_val in usd_values.items():
+                                    share = (usd_val / total_usd) * 100.0
+                                    if share > 5.0:
+                                        top_assets.add(asset)
+
+                            # If dominant > 50%, reduce to only that asset; else keep all >5%
+                            if dominant_asset and dominant_share > 50.0:
+                                selected_assets = {dominant_asset}
+                            else:
+                                selected_assets = top_assets
+
+                            # Apply selection to portfolio_data and current_positions_summary
+                            if selected_assets:
+                                portfolio_data = [p for p in portfolio_data if p['asset'] in selected_assets]
+                                current_positions_summary = [f"{p['asset']}: ${p['current_price']:.2f}" for p in portfolio_data]
+                            else:
+                                portfolio_data = []
+                                current_positions_summary = []
+                        except Exception:
+                            # On any error, fall back to original lists
+                            pass
 
                         # Create OpenAI prompt for position evaluation
                         current_positions_summary = []
@@ -722,25 +822,26 @@ IMPORTANT HOLDING PREFERENCE:
 Consider:
 - Current market conditions and technical indicators
 - Risk of holding without new opportunities (generally LOW - this is normal)
-- Transaction costs (0.5% per trade to sell - avoid unnecessary trading)
+- Transaction costs: Assume 1% per trade for BOTH sells and buys (include these costs in your decision; switching requires selling all non-target assets and buying the target)
 - Market volatility and momentum
 - Whether current positions show signs of continued upside potential
 - Raw historical performance statistics above (more reliable than calculated trust scores)
 - Success rates, total trades, and profitability patterns for each source
 
-AGGRESSIVE SWITCHING POLICY: When opportunities exist, prefer SWITCHING to recommended assets unless current positions are clearly superior. Transaction costs are acceptable when switching to recommended assets with positive sentiment and technicals.
+AGGRESSIVE SWITCHING POLICY: When a superior single asset exists, prefer SWITCHING to that asset unless current positions are clearly superior after including the 1% transaction fees.
 
 RESPOND IN THIS EXACT JSON FORMAT:
 {{
     "action": "hold|switch",
-    "reasoning": "<detailed explanation of your recommendation>",
-    "recommended_assets": ["ETH"] or [],
-    "expected_pnl_pct": <expected profit percentage for holding>,
+    "reasoning": "<detailed explanation of your recommendation, explicitly referencing the 1% per-trade fees>",
+    "recommended_assets": ["<SINGLE_TICKER>"],
+    "expected_pnl_pct": <expected profit percentage>,
     "risk_score": <risk score 1-10>
 }}
 
-If action is "switch", recommended_assets should be ["ETH"] to switch to ETH or [] to go to cash.
-If action is "hold", keep current positions.
+REQUIREMENTS:
+- If action is "switch": recommended_assets MUST contain EXACTLY ONE ticker symbol (e.g., ["ETH"]). Do NOT return an empty list. Choose the single best target asset.
+- If action is "hold": keep current positions.
 """
 
                         try:
@@ -767,10 +868,18 @@ If action is "hold", keep current positions.
 
                                 # Validate required fields
                                 if 'action' in recommendation and 'reasoning' in recommendation:
-                                    # If OpenAI recommends switching to ETH, change to empty array (cash)
-                                    if recommendation.get('action') == 'switch' and recommendation.get('recommended_assets') == ['ETH']:
-                                        recommendation['recommended_assets'] = []  # Convert to cash
-                                        recommendation['reasoning'] += " (Converting to cash instead of switching to ETH)"
+                                    # Enforce single-asset recommendation when switching
+                                    if recommendation.get('action') == 'switch':
+                                        assets = recommendation.get('recommended_assets') or []
+                                        if isinstance(assets, list):
+                                            if len(assets) > 1:
+                                                recommendation['recommended_assets'] = [assets[0]]
+                                            elif len(assets) == 0:
+                                                # If no asset provided, fall back to holding to avoid ambiguity
+                                                recommendation['action'] = 'hold'
+                                        else:
+                                            # If malformed, fall back to holding
+                                            recommendation['action'] = 'hold'
 
                                     return recommendation
                                 else:
@@ -873,6 +982,51 @@ If action is "hold", keep current positions.
                         'avg_profit': self.bandit_source_stats[source]['avg_profit'],
                         'success_rate': self.bandit_source_stats[source]['success_rate']
                     }
+
+            # Filter current positions by USD share > 5%, and optionally reduce to dominant > 50%
+            try:
+                # Build USD values from actual balances and prices we captured in valid_positions
+                usd_values = {}
+                total_usd = 0.0
+                for asset, price in valid_positions.items():
+                    bal = float(current_positions.get(asset, 0.0))
+                    usd_val = bal * float(price)
+                    if usd_val > 0:
+                        usd_values[asset] = usd_val
+                        total_usd += usd_val
+
+                # Determine dominant asset/share
+                dominant_asset = None
+                dominant_share = 0.0
+                for asset, usd_val in usd_values.items():
+                    share = (usd_val / total_usd) * 100.0 if total_usd > 0 else 0.0
+                    if share > dominant_share:
+                        dominant_share = share
+                        dominant_asset = asset
+
+                # Filter to >5% assets
+                top_assets = set()
+                for asset, usd_val in usd_values.items():
+                    share = (usd_val / total_usd) * 100.0 if total_usd > 0 else 0.0
+                    if share > 5.0:
+                        top_assets.add(asset)
+
+                # If dominant > 50%, reduce to only that asset; else keep all >5%
+                if dominant_asset and dominant_share > 50.0:
+                    selected_assets = {dominant_asset}
+                else:
+                    selected_assets = top_assets
+
+                # Apply selection to portfolio_data and current_positions_summary
+                if selected_assets:
+                    portfolio_data = [p for p in portfolio_data if p['asset'] in selected_assets]
+                    current_positions_summary = [f"{p['asset']}: ${p['current_price']:.2f}" for p in portfolio_data]
+                else:
+                    portfolio_data = []
+                    current_positions_summary = []
+            except Exception:
+                # On any error, fall back to original lists
+                pass
 
             # Create RAG prompt
             portfolio_summary = []
