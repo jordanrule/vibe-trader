@@ -268,13 +268,13 @@ TECHNICAL INDICATORS:
             
             # Create OpenAI prompt
             prompt = f"""
-You are an expert cryptocurrency portfolio manager. Analyze this portfolio of potential trades and select the ONE that looks most likely to be profitable in the next 15 minutes.
+You are an expert cryptocurrency portfolio manager. Analyze this portfolio of potential trades and select the ONE that looks most likely to be profitable.
 
 PORTFOLIO OF TRADES:
 {chr(10).join(portfolio_summary)}
 
 TASK:
-Given this portfolio of potential trades, pick ONE that looks most likely to be profitable. 
+Given this portfolio of potential trades, pick ONE that looks most likely to be profitable over the next 6 hours.  If the delta in risk-adjusted return does not justify a 1% switching fee, then hold the current position.
 Suggest an entry price for that trade that is likely to be triggered within the next 15 minutes.
 
 RESPOND IN THIS EXACT JSON FORMAT:
@@ -295,6 +295,7 @@ IMPORTANT:
 - The entry price should be realistic for the next 15 minutes
 - Consider current price, support/resistance levels, and momentum
 - Pick the trade with the highest probability of success
+- The trade should be profitable over the next 6 hours
 """
 
             logger.info(f"Sending portfolio analysis request to OpenAI for {len(portfolio_data)} assets")
