@@ -25,6 +25,11 @@ class OpportunityService(BaseService):
                 logger.info("OpportunityService using GCS storage (bucket name unavailable)")
         self.opportunities = self.load_opportunities()
         self.bandit_source_stats = self.load_bandit_model()
+        # Ensure performance log file exists (empty) for downstream processes
+        try:
+            self._ensure_performance_file_exists()
+        except Exception as e:
+            logger.warning(f"Could not ensure state_performance.json exists: {e}")
     
     def load_opportunities(self) -> Dict:
         """Load trading opportunities from storage"""
@@ -211,8 +216,19 @@ class OpportunityService(BaseService):
                 'duration_actual_hours': duration_actual
             }
 
-            with open('state_performance.json', 'a') as f:
-                f.write(json.dumps(outcome) + '\n')
+            # Write to GCS in cloud mode, else append to local file
+            try:
+                logger.info("Appending outcome to state_performance.json")
+                if self.cloud_storage:
+                    logger.info("Using cloud storage to append to state_performance.json")
+                    self.cloud_storage.append_text('state_performance.json', json.dumps(outcome) + '\n')
+                else:
+                    logger.info("Using local filesystem to append to state_performance.json")
+                    with open('state_performance.json', 'a') as f:
+                        f.write(json.dumps(outcome) + '\n')
+                logger.info("Successfully appended outcome to state_performance.json")
+            except Exception as write_err:
+                logger.error(f"Error writing outcome to storage: {write_err}")
 
             logger.info(f"Recorded simple buy-and-hold PnL for {asset}: {pnl_pct:+.2f}% (${pnl_usd:+.2f}) - held {duration_actual:.1f}h")
 
@@ -337,22 +353,35 @@ class OpportunityService(BaseService):
     def update_bandit_model_from_outcomes(self):
         """Update bandit model based on newly recorded PnL outcomes"""
         try:
+            # Ensure file exists before reading
+            try:
+                self._ensure_performance_file_exists()
+            except Exception as e:
+                logger.warning(f"Failed to ensure state_performance.json exists prior to read: {e}")
+
             # Read the state_performance.json file
             if self.cloud_storage:
-                if not self.cloud_storage.file_exists('state_performance.json'):
-                    logger.info("No performance data file found, skipping bandit model update")
+                logger.info("Checking existence of state_performance.json in GCS")
+                exists = self.cloud_storage.file_exists('state_performance.json')
+                logger.info(f"state_performance.json exists in GCS: {exists}")
+                if not exists:
+                    logger.info("No performance data file found in GCS (should have been created empty). Skipping update.")
                     return
 
+                logger.info("Reading state_performance.json from GCS")
                 performance_content = self.cloud_storage.read_text('state_performance.json')
+                logger.info(f"Read {len(performance_content or '')} characters from state_performance.json (GCS)")
                 lines = performance_content.strip().split('\n') if performance_content else []
             else:
                 # Local fallback
+                logger.info("Reading state_performance.json from local filesystem")
                 if not os.path.exists('state_performance.json'):
-                    logger.info("No performance data file found, skipping bandit model update")
+                    logger.info("No performance data file found locally (should have been created empty). Skipping update.")
                     return
 
                 with open('state_performance.json', 'r') as f:
                     lines = f.readlines()
+                logger.info(f"Read {len(lines)} lines from local state_performance.json")
 
             # Track which outcomes we've already processed
             processed_outcomes = set()
@@ -459,6 +488,34 @@ class OpportunityService(BaseService):
 
         except Exception as e:
             logger.error(f"Error updating bandit model from outcomes: {e}")
+
+    def _ensure_performance_file_exists(self) -> None:
+        """Ensure state_performance.json exists (as empty file) in target storage."""
+        try:
+            if self.cloud_storage:
+                logger.info("Ensuring state_performance.json exists in GCS")
+                try:
+                    exists = self.cloud_storage.file_exists('state_performance.json')
+                except Exception as e:
+                    logger.warning(f"Could not check existence of state_performance.json in GCS: {e}")
+                    exists = False
+                if not exists:
+                    logger.info("state_performance.json missing in GCS; creating empty file")
+                    # Create an empty file in GCS
+                    self.cloud_storage.write_text('state_performance.json', '')
+                else:
+                    logger.info("state_performance.json already exists in GCS")
+            else:
+                logger.info("Ensuring state_performance.json exists locally")
+                if not os.path.exists('state_performance.json'):
+                    logger.info("state_performance.json missing locally; creating empty file")
+                    # Safely create empty file if missing
+                    with open('state_performance.json', 'a'):
+                        pass
+                else:
+                    logger.info("state_performance.json already exists locally")
+        except Exception as e:
+            logger.warning(f"Failed to ensure state_performance.json exists: {e}")
     
     def get_source_trust_score(self, source: str) -> float:
         """Get trust score for a source based on bandit model"""
