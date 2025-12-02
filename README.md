@@ -12,7 +12,7 @@ If you plan to run this in a team setting, a fresh implementation is recommended
 
 The live-trading results of vibe trader show potential, but improvements need to be made.  Specifically: vibe trader is far too confident in it's ability to pick the most relevant opportunity cycle-to-cycle, and loses money consistently on transaction costs.  The fundamental hypothesis of telegram signals providing a market edge over medium-term time horizons looks promising, but we still have not collected enough data to make a statistically significant determination.
 
-If you plan to run this in a live setting, backtestable evaluations on historical telegram and market data are recommended.  In production, it is neccessary to validate changes to the prompts or their struture to ensure agent decisions trend towards making profitable financial decisions.
+If you plan to run this in a live setting, backtestable evaluations on historical telegram and market data are recommended.  In production, it is neccessary to validate changes to the prompts or their structure to ensure agent decisions trend towards making profitable financial decisions.
 
 ## Getting Started
 
